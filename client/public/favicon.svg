@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <title>TexTrace</title>
+  <rect width="32" height="32" rx="7" fill="#2a78d6"/>
+  <!-- yarn cone on a spindle: tapered body with wound-thread bands -->
+  <path d="M16 3.5v25" stroke="#cfe2f8" stroke-width="1.6" stroke-linecap="round"/>
+  <path d="M12.6 7h6.8l3.6 17.5H9z" fill="#ffffff"/>
+  <path d="M11.9 11h8.2M11.1 15h9.8M10.3 19h11.4" stroke="#2a78d6" stroke-width="1.4" stroke-linecap="round" opacity="0.55"/>
+  <rect x="7.5" y="24.5" width="17" height="3" rx="1.5" fill="#cfe2f8"/>
+</svg>
