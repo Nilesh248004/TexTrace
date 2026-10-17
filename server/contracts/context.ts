@@ -34,19 +34,19 @@ function addRef(state: ContextState, ref: EntityRef): void {
   else state.refs[i] = ref;
 }
 
-export function createContext(
+export async function createContext(
   db: DB,
   actor: Actor,
   timestamp: string,
   contract: ExecContext['contract'],
   fn: string,
   state: ContextState,
-): ExecContext {
+): Promise<ExecContext> {
   return {
     db,
     actor,
     timestamp,
-    settings: getSettings(db),
+    settings: await getSettings(db),
     contract,
     fn,
     check(rule, passed, detail, code) {
@@ -56,49 +56,49 @@ export function createContext(
     note(rule, detail) {
       state.checks.push({ rule, passed: true, detail });
     },
-    insert(type, input) {
+    async insert(type, input) {
       const def = entityDef(type);
       const row: Record<string, unknown> = { ...input, version: 1 };
       const columns = Object.keys(row);
-      db.prepare(`INSERT INTO ${def.table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`)
+      await db.prepare(`INSERT INTO ${def.table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`)
         .run(...columns.map((key) => row[key]));
-      const stored = loadRow(db, type, String(row[def.idColumn]));
+      const stored = await loadRow(db, type, String(row[def.idColumn]));
       if (!stored) throw new Error(`Tracked insert did not create ${type}:${String(row[def.idColumn])}`);
       addChange(state, { table: def.table, op: 'insert', key: String(row[def.idColumn]), before: null, after: stored });
       addRef(state, refFor(type, stored));
       return stored;
     },
-    update(type, id, patch) {
+    async update(type, id, patch) {
       const def = entityDef(type);
-      const before = loadRow(db, type, id);
+      const before = await loadRow(db, type, id);
       if (!before) throw new ContractRejection('exists', `${type} ${id} does not exist`, 'NOT_FOUND');
       const next: Record<string, unknown> = { ...patch, version: Number(before.version ?? 1) + 1 };
       const columns = Object.keys(next);
-      db.prepare(`UPDATE ${def.table} SET ${columns.map((key) => `${key} = ?`).join(', ')} WHERE ${def.idColumn} = ?`)
+      await db.prepare(`UPDATE ${def.table} SET ${columns.map((key) => `${key} = ?`).join(', ')} WHERE ${def.idColumn} = ?`)
         .run(...columns.map((key) => next[key]), id);
-      const after = loadRow(db, type, id);
+      const after = await loadRow(db, type, id);
       if (!after) throw new Error(`Tracked update lost ${type}:${id}`);
       addChange(state, { table: def.table, op: 'update', key: id, before, after });
       addRef(state, refFor(type, after));
       return after;
     },
-    insertRaw(table, row) {
+    async insertRaw(table, row) {
       const columns = Object.keys(row);
-      db.prepare(`INSERT INTO ${table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`)
+      await db.prepare(`INSERT INTO ${table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`)
         .run(...columns.map((key) => row[key]));
       addChange(state, { table, op: 'insert', key: String(row.id ?? columns.map((k) => row[k]).join(':')), before: null, after: row });
     },
-    updateRaw(table, keyColumn, key, patch) {
-      const before = db.prepare(`SELECT * FROM ${table} WHERE ${keyColumn} = ?`).get(key) as Record<string, unknown> | undefined;
+    async updateRaw(table, keyColumn, key, patch) {
+      const before = await db.prepare(`SELECT * FROM ${table} WHERE ${keyColumn} = ?`).get(key) as Record<string, unknown> | undefined;
       if (!before) throw new ContractRejection('exists', `${table} row ${key} does not exist`, 'NOT_FOUND');
       const columns = Object.keys(patch);
-      db.prepare(`UPDATE ${table} SET ${columns.map((column) => `${column} = ?`).join(', ')} WHERE ${keyColumn} = ?`)
+      await db.prepare(`UPDATE ${table} SET ${columns.map((column) => `${column} = ?`).join(', ')} WHERE ${keyColumn} = ?`)
         .run(...columns.map((column) => patch[column]), key);
-      const after = db.prepare(`SELECT * FROM ${table} WHERE ${keyColumn} = ?`).get(key) as Record<string, unknown>;
+      const after = await db.prepare(`SELECT * FROM ${table} WHERE ${keyColumn} = ?`).get(key) as Record<string, unknown>;
       addChange(state, { table, op: 'update', key: String(key), before, after });
     },
-    get<T>(sql: string, ...params: unknown[]) { return db.prepare(sql).get(...params) as T | undefined; },
-    all<T>(sql: string, ...params: unknown[]) { return db.prepare(sql).all(...params) as T[]; },
+    async get<T>(sql: string, ...params: unknown[]) { return await db.prepare(sql).get(...params) as T | undefined; },
+    async all<T>(sql: string, ...params: unknown[]) { return await db.prepare(sql).all(...params) as T[]; },
     nextSeq(name) { return nextSeq(db, name); },
     newId(prefix, pad) { return newId(db, prefix, pad); },
     notify(notification) { state.notifications.push(notification); },

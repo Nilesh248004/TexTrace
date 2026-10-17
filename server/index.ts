@@ -2,18 +2,19 @@ import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config';
-import { getDb, isSeeded } from './db';
+import { isSeeded, openConfiguredDb, setDb } from './db';
 import { SimulatedLedger } from './ledger/simulated';
 import { seedDatabase } from './seed/loader';
 import { createApp } from './app';
 import { attachWebSocket } from './api/ws';
 
-const db = getDb();
+const db = await openConfiguredDb();
+setDb(db);
 const ledger = new SimulatedLedger(db);
-ledger.init();
-if (!isSeeded(db)) {
+await ledger.init();
+if (!(await isSeeded(db))) {
   const started = Date.now();
-  seedDatabase(db, ledger);
+  await seedDatabase(db, ledger);
   console.log(`TexTrace seeded deterministic demo data in ${Date.now() - started} ms`);
 }
 
@@ -32,7 +33,7 @@ const ws = attachWebSocket(server, ledger);
 function shutdown(signal: NodeJS.Signals): void {
   console.log(`${signal} received; stopping TexTrace API.`);
   ws.close();
-  server.close(() => db.close());
+  server.close(() => { void db.close(); });
 }
 
 process.once('SIGINT', () => shutdown('SIGINT'));

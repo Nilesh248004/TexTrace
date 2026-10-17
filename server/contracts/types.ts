@@ -65,21 +65,21 @@ export interface ExecContext {
   note(rule: string, detail: string): void;
 
   /** Tracked insert into an ENTITY table (see server/db/entities.ts). Sets version=1, computes record hash, adds EntityRef + DbChange. Returns the stored row. */
-  insert(entityType: string, row: Record<string, unknown>): Record<string, unknown>;
+  insert(entityType: string, row: Record<string, unknown>): Promise<Record<string, unknown>>;
   /** Tracked update of an ENTITY row by id: bumps version, re-hashes, adds EntityRef + DbChange (before/after). Returns the new row. */
-  update(entityType: string, id: string, patch: Record<string, unknown>): Record<string, unknown>;
+  update(entityType: string, id: string, patch: Record<string, unknown>): Promise<Record<string, unknown>>;
   /** Tracked insert into a NON-entity table (e.g. standards_history, notifications). Adds DbChange only. */
-  insertRaw(table: string, row: Record<string, unknown>): void;
+  insertRaw(table: string, row: Record<string, unknown>): Promise<void>;
   /** Tracked update of a NON-entity table row. */
-  updateRaw(table: string, keyColumn: string, key: string | number, patch: Record<string, unknown>): void;
+  updateRaw(table: string, keyColumn: string, key: string | number, patch: Record<string, unknown>): Promise<void>;
 
-  get<T = Record<string, unknown>>(sql: string, ...params: unknown[]): T | undefined;
-  all<T = Record<string, unknown>>(sql: string, ...params: unknown[]): T[];
+  get<T = Record<string, unknown>>(sql: string, ...params: unknown[]): Promise<T | undefined>;
+  all<T = Record<string, unknown>>(sql: string, ...params: unknown[]): Promise<T[]>;
 
   /** Next value of a named sequence (complaint:2026, lot:2026, dispatch:2026 ...). Rolled back with the action on rejection. */
-  nextSeq(name: string): number;
+  nextSeq(name: string): Promise<number>;
   /** New padded id, e.g. newId('TR') -> 'TR-000124'. */
-  newId(prefix: string, pad?: number): string;
+  newId(prefix: string, pad?: number): Promise<string>;
 
   /** Queue a notification (inserted + broadcast only if the action commits). */
   notify(n: NotificationDraft): void;
@@ -90,8 +90,6 @@ export interface ExecContext {
    */
   setPayload(payload: Record<string, unknown>): void;
 }
-
-export type ContractHandler<A = any, R = any> = (ctx: ExecContext, args: A) => R;
 
 export interface ContractFunctionDef<A = any, R = any> {
   key: ContractFunction; // 'Quality.registerComplaint'
@@ -122,7 +120,7 @@ export interface ActionRequest {
 
 export interface ActionExecutor {
   /** Invoke a contract function inside the action (permission check + rules + tracked writes). */
-  call<R = any>(fn: ContractFunction, args: unknown): R;
+  call<R = any>(fn: ContractFunction, args: unknown): Promise<R>;
   /** Refine the trace label once ids are known (e.g. after complaint no is allocated). */
   setLabel(label: string): void;
   /** Attach extra developer info to the trace. */
@@ -156,7 +154,9 @@ export interface ContractRuntime {
   readonly ledger: LedgerService;
   readonly contracts: ContractModule[];
   /** Run an action atomically (see header comment). Never throws for business rejections. */
-  run<R>(req: ActionRequest, body: (x: ActionExecutor) => R): ActionResult<R>;
+  run<R>(req: ActionRequest, body: (x: ActionExecutor) => Promise<R> | R): Promise<ActionResult<R>>;
   /** Record an action that does not write the ledger (tamper simulation, validate chain, demo reset, failed upload). */
-  recordNonLedger(a: NonLedgerAction): DevTrace;
+  recordNonLedger(a: NonLedgerAction): Promise<DevTrace>;
 }
+
+export type ContractHandler<A = any, R = any> = (ctx: ExecContext, args: A) => Promise<R> | R;

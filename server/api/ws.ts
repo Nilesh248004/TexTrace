@@ -5,8 +5,8 @@ import type { LedgerService } from '../ledger/types';
 
 export function attachWebSocket(server: Server, ledger: LedgerService): { close(): void } {
   const sockets = new WebSocketServer({ server, path: '/ws' });
-  sockets.on('connection', (socket) => {
-    socket.send(JSON.stringify({ type: 'hello', data: { serverTime: new Date().toISOString(), height: ledger.height() } }));
+  sockets.on('connection', async (socket) => {
+    socket.send(JSON.stringify({ type: 'hello', data: { serverTime: new Date().toISOString(), height: await ledger.height() } }));
   });
   const unsubscribe = bus.onEvent((event) => {
     const message = JSON.stringify(event);

@@ -29,38 +29,38 @@ export function roundKg(kg: number): number {
   return Math.round(kg * 1000) / 1000;
 }
 
-export function lotQuantities(db: DB, lotId: string): LotQuantities {
-  const produced = db
+export async function lotQuantities(db: DB, lotId: string): Promise<LotQuantities> {
+  const produced = await db
     .prepare(`SELECT COALESCE(SUM(output_kg), 0) AS kg FROM production_events WHERE lot_id = ? AND department = 'AW'`)
-    .get(lotId) as { kg: number };
-  const packed = db
+    .get<{ kg: number | string }>(lotId);
+  const packed = await db
     .prepare(`SELECT COALESCE(SUM(total_kg), 0) AS kg, COUNT(*) AS n FROM packing WHERE lot_id = ?`)
-    .get(lotId) as { kg: number; n: number };
-  const dispatched = db
+    .get<{ kg: number | string; n: number | string }>(lotId);
+  const dispatched = await db
     .prepare(`SELECT COALESCE(SUM(quantity_kg), 0) AS kg FROM dispatch_lots WHERE lot_id = ?`)
-    .get(lotId) as { kg: number };
-  const depts = db
+    .get<{ kg: number | string }>(lotId);
+  const depts = await db
     .prepare(`SELECT DISTINCT department FROM production_events WHERE lot_id = ?`)
-    .all(lotId) as { department: string }[];
+    .all<{ department: string }>(lotId);
 
   let currentStage: Department = 'RM';
-  if (packed.n > 0) {
+  if (Number(packed?.n ?? 0) > 0) {
     currentStage = 'PACK';
   } else {
     const present = new Set(depts.map((d) => d.department));
     for (const d of STAGE_ORDER) if (present.has(d)) currentStage = d;
   }
   return {
-    producedKg: roundKg(produced.kg),
-    packedKg: roundKg(packed.kg),
-    dispatchedKg: roundKg(dispatched.kg),
+    producedKg: roundKg(Number(produced?.kg ?? 0)),
+    packedKg: roundKg(Number(packed?.kg ?? 0)),
+    dispatchedKg: roundKg(Number(dispatched?.kg ?? 0)),
     currentStage,
   };
 }
 
 /** Per-department totals of the lot's production events (every department present, zeros when no events). */
-export function stageOutputs(db: DB, lotId: string): Record<Department, StageOutput> {
-  const rows = db
+export async function stageOutputs(db: DB, lotId: string): Promise<Record<Department, StageOutput>> {
+  const rows = await db
     .prepare(
       `SELECT department,
               COALESCE(SUM(input_kg), 0)  AS input_kg,
@@ -71,7 +71,7 @@ export function stageOutputs(db: DB, lotId: string): Record<Department, StageOut
               COUNT(DISTINCT event_date) AS days
          FROM production_events WHERE lot_id = ? GROUP BY department`,
     )
-    .all(lotId) as {
+    .all<{
     department: Department;
     input_kg: number;
     output_kg: number;
@@ -79,7 +79,7 @@ export function stageOutputs(db: DB, lotId: string): Record<Department, StageOut
     first_date: string | null;
     last_date: string | null;
     days: number;
-  }[];
+  }>(lotId);
   const out = {} as Record<Department, StageOutput>;
   for (const d of DEPARTMENTS) out[d] = { inputKg: 0, outputKg: 0, wasteKg: 0, firstDate: null, lastDate: null, days: 0 };
   for (const r of rows) {
@@ -90,17 +90,17 @@ export function stageOutputs(db: DB, lotId: string): Record<Department, StageOut
       wasteKg: roundKg(r.waste_kg),
       firstDate: r.first_date,
       lastDate: r.last_date,
-      days: r.days,
+      days: Number(r.days),
     };
   }
   return out;
 }
 
 /** Sorted distinct production dates of one department for one lot (D1 = first element). */
-export function deptEventDates(db: DB, lotId: string, dept: Department | string): string[] {
-  const rows = db
+export async function deptEventDates(db: DB, lotId: string, dept: Department | string): Promise<string[]> {
+  const rows = await db
     .prepare(`SELECT DISTINCT event_date FROM production_events WHERE lot_id = ? AND department = ? ORDER BY event_date`)
-    .all(lotId, dept) as { event_date: string }[];
+    .all<{ event_date: string }>(lotId, dept);
   return rows.map((r) => r.event_date);
 }
 

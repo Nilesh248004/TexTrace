@@ -8,14 +8,14 @@ import { createRuntime } from '../../server/contracts/runtime';
 import type { DB } from '../../server/db';
 
 let db: DB | undefined;
-afterEach(() => { db?.close(); db = undefined; });
+afterEach(async () => { await db?.close(); db = undefined; });
 
 describe('TexTrace API foundation', () => {
   it('logs in and serves seeded dashboard and traceability records', async () => {
     db = openDb(':memory:');
     const ledger = new SimulatedLedger(db);
-    ledger.init();
-    seedDatabase(db, ledger);
+    await ledger.init();
+    await seedDatabase(db, ledger);
     const app = createApp(db, ledger);
     const login = await request(app).post('/api/auth/login').send({ username: 'qa' }).expect(200);
     const token = login.body.data.token as string;
@@ -34,29 +34,31 @@ describe('TexTrace API foundation', () => {
     expect(Array.isArray(activity.body.data)).toBe(true);
   });
 
-  it('records unauthorized contract calls as invalid ledger transactions without writes', () => {
+  it('records unauthorized contract calls as invalid ledger transactions without writes', async () => {
     db = openDb(':memory:');
     const ledger = new SimulatedLedger(db);
-    ledger.init();
-    seedDatabase(db, ledger, 'pre-demo');
+    await ledger.init();
+    await seedDatabase(db, ledger, 'pre-demo');
     const runtime = createRuntime(db, ledger);
-    const result = runtime.run({
+    const result = await runtime.run({
       action: 'test.permission', label: 'Try restricted call',
       actor: { id: 'U-DISPATCH', username: 'dispatch', name: 'Dispatch User', role: 'DISPATCH', org: 'MillOrg' },
       request: { method: 'POST', path: '/api/test', query: {}, body: {} },
     }, (executor) => executor.call('Quality.recordConclusion', {}));
     expect(result.ok).toBe(false);
     expect(result.status).toBe(403);
-    expect(ledger.getBlockTxs(ledger.height()).at(-1)?.status).toBe('INVALID');
-    expect(ledger.getBlockTxs(ledger.height()).at(-1)?.fn).toBe('checkPermission');
-    expect(db.prepare('SELECT COUNT(*) n FROM conclusions').get()).toMatchObject({ n: 0 });
+    const height = await ledger.height();
+    const txs = await ledger.getBlockTxs(height);
+    expect(txs.at(-1)?.status).toBe('INVALID');
+    expect(txs.at(-1)?.fn).toBe('checkPermission');
+    expect(await db.prepare('SELECT COUNT(*) n FROM conclusions').get()).toMatchObject({ n: 0 });
   });
 
   it('registers, transitions, and closes a complaint through tracked contracts', async () => {
     db = openDb(':memory:');
     const ledger = new SimulatedLedger(db);
-    ledger.init();
-    seedDatabase(db, ledger);
+    await ledger.init();
+    await seedDatabase(db, ledger);
     const app = createApp(db, ledger);
     const login = async (username: string) => (await request(app).post('/api/auth/login').send({ username }).expect(200)).body.data.token as string;
     const csToken = await login('cs');
@@ -74,14 +76,14 @@ describe('TexTrace API foundation', () => {
     }).expect(200);
     expect(closed.body.data.complaint.status).toBe('RESOLVED');
     expect(closed.body.data.conclusion.conclusion_html).not.toContain('<script>');
-    expect(ledger.getBlockTxs(ledger.height()).every((tx) => tx.status === 'VALID')).toBe(true);
+    expect((await ledger.getBlockTxs(await ledger.height())).every((tx) => tx.status === 'VALID')).toBe(true);
   });
 
   it('finds the planted RF-3 D2 fault and anchors the analysis result', async () => {
     db = openDb(':memory:');
     const ledger = new SimulatedLedger(db);
-    ledger.init();
-    seedDatabase(db, ledger);
+    await ledger.init();
+    await seedDatabase(db, ledger);
     const app = createApp(db, ledger);
     const login = await request(app).post('/api/auth/login').send({ username: 'qa' }).expect(200);
     const token = login.body.data.token as string;
@@ -93,14 +95,14 @@ describe('TexTrace API foundation', () => {
     expect(response.body.data.result.suspected.dayIndex).toBe(2);
     expect(response.body.data.result.rootCauses[0].id).toBe('RF_BREAK_DRAFT');
     expect(response.body.data.chain.verified).toBe(true);
-    expect(db.prepare('SELECT status FROM complaints WHERE id=?').get('CMP-22-2026')).toMatchObject({ status: 'UNDER_ANALYSIS' });
+    expect(await db.prepare('SELECT status FROM complaints WHERE id=?').get('CMP-22-2026')).toMatchObject({ status: 'UNDER_ANALYSIS' });
   });
 
   it('gate-checks, dispatches packed yarn, and issues a public passport', async () => {
     db = openDb(':memory:');
     const ledger = new SimulatedLedger(db);
-    ledger.init();
-    seedDatabase(db, ledger);
+    await ledger.init();
+    await seedDatabase(db, ledger);
     const app = createApp(db, ledger);
     const login = await request(app).post('/api/auth/login').send({ username: 'dispatch' }).expect(200);
     const token = login.body.data.token as string;
@@ -124,8 +126,8 @@ describe('TexTrace API foundation', () => {
   it('creates, versions, and retires standards through QA permissions', async () => {
     db = openDb(':memory:');
     const ledger = new SimulatedLedger(db);
-    ledger.init();
-    seedDatabase(db, ledger, 'pre-demo');
+    await ledger.init();
+    await seedDatabase(db, ledger, 'pre-demo');
     const app = createApp(db, ledger);
     const login = await request(app).post('/api/auth/login').send({ username: 'qa' }).expect(200);
     const token = login.body.data.token as string;
@@ -145,9 +147,9 @@ describe('TexTrace API foundation', () => {
   it('tracks production writes and rejects out-of-order stages', async () => {
     db = openDb(':memory:');
     const ledger = new SimulatedLedger(db);
-    ledger.init();
-    seedDatabase(db, ledger, 'pre-demo');
-    db.prepare("UPDATE lots SET status='PLANNED' WHERE id='LOT-183-2026'").run();
+    await ledger.init();
+    await seedDatabase(db, ledger, 'pre-demo');
+    await db.prepare("UPDATE lots SET status='PLANNED' WHERE id='LOT-183-2026'").run();
     const app = createApp(db, ledger);
     const login = await request(app).post('/api/auth/login').send({ username: 'operator' }).expect(200);
     const token = login.body.data.token as string;
@@ -155,20 +157,20 @@ describe('TexTrace API foundation', () => {
       lotId: 'LOT-183-2026', department: 'RM', eventDate: '2026-10-01', inputKg: 1000, outputKg: 995, wasteKg: 5, params: {}, notes: 'Raw material issued to line B',
     }).expect(201);
     expect(event.body.trace.invocations[0].contract).toBe('ProcessEvent');
-    expect(db.prepare('SELECT status FROM lots WHERE id=?').get('LOT-183-2026')).toMatchObject({ status: 'IN_PRODUCTION' });
+    expect(await db.prepare('SELECT status FROM lots WHERE id=?').get('LOT-183-2026')).toMatchObject({ status: 'IN_PRODUCTION' });
     const rejected = await request(app).post('/api/production-events').set('Authorization', `Bearer ${token}`).send({
       lotId: 'LOT-183-2026', department: 'CARD', machineId: 'CARD-1', eventDate: '2026-10-02', inputKg: 1000, outputKg: 990, wasteKg: 10, params: {},
     }).expect(422);
     expect(rejected.body.error.message).toContain('Stage order violation');
-    expect(ledger.getBlockTxs(ledger.height()).at(-1)?.status).toBe('INVALID');
+    expect((await ledger.getBlockTxs(await ledger.height())).at(-1)?.status).toBe('INVALID');
   });
 
   it('assigns consecutive non-overlapping pack serial ranges', async () => {
     db = openDb(':memory:');
     const ledger = new SimulatedLedger(db);
-    ledger.init();
-    seedDatabase(db, ledger);
-    db.prepare(`INSERT INTO production_events(id,lot_id,department,machine_id,event_date,day_index,shift,input_kg,output_kg,waste_kg,params,notes,operator_id,created_at)
+    await ledger.init();
+    await seedDatabase(db, ledger);
+    await db.prepare(`INSERT INTO production_events(id,lot_id,department,machine_id,event_date,day_index,shift,input_kg,output_kg,waste_kg,params,notes,operator_id,created_at)
       VALUES('PE-AW-182','LOT-182-2026','AW','AW-1','2026-10-08',1,NULL,6000,5900,100,'{}','','U-OPERATOR','2026-10-08T16:00:00.000Z')`).run();
     const app = createApp(db, ledger);
     const login = await request(app).post('/api/auth/login').send({ username: 'dispatch' }).expect(200);

@@ -8,8 +8,9 @@ import type { Settings } from '@shared/types';
 import { DEFAULT_LOT_CODE_FORMAT, DEFAULT_LOT_NO_FORMAT } from '@shared/format';
 import { DEFAULT_QUALITY_COLUMNS } from '@shared/params';
 import { DEFAULT_WARN_FRACTION } from '@shared/quality';
+import { openPostgresDatabase, postgresSchema, SqliteDatabase, type DB } from './driver';
 
-export type DB = Database.Database;
+export type { DB } from './driver';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SCHEMA_SQL = fs.readFileSync(path.join(here, 'schema.sql'), 'utf8');
@@ -19,12 +20,16 @@ let current: DB | null = null;
 /** Open (or create) a database and apply the schema. Use ':memory:' in tests. */
 export function openDb(file: string = config.dbFile): DB {
   if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
-  const db = new Database(file);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
-  db.pragma('synchronous = NORMAL');
-  db.exec(SCHEMA_SQL);
-  return db;
+  const native = new Database(file);
+  native.pragma('journal_mode = WAL');
+  native.pragma('foreign_keys = ON');
+  native.pragma('synchronous = NORMAL');
+  native.exec(SCHEMA_SQL);
+  return new SqliteDatabase(native);
+}
+
+export async function openConfiguredDb(): Promise<DB> {
+  return config.databaseUrl ? openPostgresDatabase(config.databaseUrl, SCHEMA_SQL) : openDb();
 }
 
 /** Process-wide connection (lazily opened). Tests may call setDb() with an in-memory DB. */
@@ -38,22 +43,19 @@ export function setDb(db: DB): void {
 }
 
 /** Drop every table and re-apply the schema (used by demo reset). Keeps the same connection object. */
-export function wipeDb(db: DB = getDb()): void {
-  db.pragma('foreign_keys = OFF');
-  const tables = db
-    .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`)
-    .all() as { name: string }[];
-  const tx = db.transaction(() => {
-    for (const t of tables) db.exec(`DROP TABLE IF EXISTS "${t.name}"`);
-  });
-  tx();
-  db.exec(SCHEMA_SQL);
-  db.pragma('foreign_keys = ON');
+export async function wipeDb(db: DB = getDb()): Promise<void> {
+  const tables = db.dialect === 'postgres'
+    ? await db.prepare(`SELECT tablename AS name FROM pg_tables WHERE schemaname='public'`).all<{ name: string }>()
+    : await db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`).all<{ name: string }>();
+  await db.transaction(async () => {
+    for (const table of tables) await db.exec(`DROP TABLE IF EXISTS "${table.name}"${db.dialect === 'postgres' ? ' CASCADE' : ''}`);
+  })();
+  await db.exec(db.dialect === 'postgres' ? postgresSchema(SCHEMA_SQL) : SCHEMA_SQL);
 }
 
-export function isSeeded(db: DB = getDb()): boolean {
-  const row = db.prepare(`SELECT COUNT(*) AS n FROM ledger_blocks`).get() as { n: number };
-  return row.n > 1;
+export async function isSeeded(db: DB = getDb()): Promise<boolean> {
+  const row = await db.prepare(`SELECT COUNT(*) AS n FROM ledger_blocks`).get<{ n: number | string }>();
+  return Number(row?.n ?? 0) > 1;
 }
 
 // ------------------------------------------------------------------ helpers
@@ -71,29 +73,27 @@ export function toJson(v: unknown): string {
 }
 
 /** Atomic named sequence (e.g. 'complaint:2026', 'lot:2026', 'dispatch:2026', 'id:TR'). Returns the new value. */
-export function nextSeq(db: DB, name: string, startAt = 1): number {
-  const row = db.prepare(`SELECT value FROM sequences WHERE name = ?`).get(name) as { value: number } | undefined;
-  const value = row ? row.value + 1 : startAt;
-  db.prepare(`INSERT INTO sequences(name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value`).run(name, value);
-  return value;
+export async function nextSeq(db: DB, name: string, startAt = 1): Promise<number> {
+  const row = await db.prepare(`INSERT INTO sequences(name,value) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET value=sequences.value+1 RETURNING value`).get<{ value: number | string }>(name, startAt);
+  return Number(row?.value ?? startAt);
 }
 
 /** Peek a sequence without incrementing (returns the value the next nextSeq() would return). */
-export function peekSeq(db: DB, name: string, startAt = 1): number {
-  const row = db.prepare(`SELECT value FROM sequences WHERE name = ?`).get(name) as { value: number } | undefined;
-  return row ? row.value + 1 : startAt;
+export async function peekSeq(db: DB, name: string, startAt = 1): Promise<number> {
+  const row = await db.prepare(`SELECT value FROM sequences WHERE name = ?`).get<{ value: number | string }>(name);
+  return row ? Number(row.value) + 1 : startAt;
 }
 
 /** Ensure a sequence is at least `value` (seeding with historical numbers). */
-export function bumpSeqTo(db: DB, name: string, value: number): void {
-  db.prepare(
-    `INSERT INTO sequences(name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = MAX(value, excluded.value)`,
+export async function bumpSeqTo(db: DB, name: string, value: number): Promise<void> {
+  await db.prepare(
+    `INSERT INTO sequences(name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = CASE WHEN sequences.value > excluded.value THEN sequences.value ELSE excluded.value END`,
   ).run(name, value);
 }
 
 /** Generate a padded id such as 'TR-000123' from the 'id:TR' sequence. */
-export function newId(db: DB, prefix: string, pad = 6): string {
-  return `${prefix}-${String(nextSeq(db, `id:${prefix}`)).padStart(pad, '0')}`;
+export async function newId(db: DB, prefix: string, pad = 6): Promise<string> {
+  return `${prefix}-${String(await nextSeq(db, `id:${prefix}`)).padStart(pad, '0')}`;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -106,14 +106,14 @@ export const DEFAULT_SETTINGS: Settings = {
   qualityColumns: DEFAULT_QUALITY_COLUMNS,
 };
 
-export function getSettings(db: DB = getDb()): Settings {
-  const rows = db.prepare(`SELECT key, value FROM settings`).all() as { key: string; value: string }[];
+export async function getSettings(db: DB = getDb()): Promise<Settings> {
+  const rows = await db.prepare(`SELECT key, value FROM settings`).all<{ key: string; value: string }>();
   const s: Settings = { ...DEFAULT_SETTINGS };
   for (const r of rows) (s as unknown as Record<string, unknown>)[r.key] = parseJson(r.value, null);
   return s;
 }
 
-export function writeSettings(db: DB, patch: Partial<Settings>): void {
+export async function writeSettings(db: DB, patch: Partial<Settings>): Promise<void> {
   const stmt = db.prepare(`INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`);
-  for (const [k, v] of Object.entries(patch)) if (v !== undefined) stmt.run(k, toJson(v));
+  for (const [key, value] of Object.entries(patch)) if (value !== undefined) await stmt.run(key, toJson(value));
 }

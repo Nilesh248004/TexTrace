@@ -41,7 +41,7 @@ export interface LedgerService {
   readonly adapter: string;
 
   /** Create the genesis block (System.genesis tx with network config) if the chain is empty. Idempotent. */
-  init(opts?: { timestamp?: string }): void;
+  init(opts?: { timestamp?: string }): Promise<void>;
 
   /**
    * Hash, order and commit `pending` transactions as ONE new block: computes each txHash
@@ -51,23 +51,23 @@ export interface LedgerService {
    * Synchronous; MUST be called inside the caller's SQLite transaction (it does not open its own).
    * `timestamp` overrides the block/tx time (used by the seeder to build history); must be >= previous block time.
    */
-  commit(pending: PendingTx[], opts?: { timestamp?: string }): CommitResult;
+  commit(pending: PendingTx[], opts?: { timestamp?: string }): Promise<CommitResult>;
 
-  height(): number;
-  getBlock(number: number): LedgerBlock | null;
+  height(): Promise<number>;
+  getBlock(number: number): Promise<LedgerBlock | null>;
   /** Newest first. */
-  listBlocks(offset: number, limit: number): { items: LedgerBlock[]; total: number };
-  getBlockTxs(number: number): LedgerTx[];
-  getTx(txHash: string): LedgerTx | null;
+  listBlocks(offset: number, limit: number): Promise<{ items: LedgerBlock[]; total: number }>;
+  getBlockTxs(number: number): Promise<LedgerTx[]>;
+  getTx(txHash: string): Promise<LedgerTx | null>;
   /** All txs whose entityRefs include (type,id), oldest first. */
-  getTxsByEntity(type: string, id: string): LedgerTx[];
+  getTxsByEntity(type: string, id: string): Promise<LedgerTx[]>;
   /** Newest first. */
-  listTxs(filter: { contract?: string; fn?: string; offset: number; limit: number }): { items: LedgerTx[]; total: number };
+  listTxs(filter: { contract?: string; fn?: string; offset: number; limit: number }): Promise<{ items: LedgerTx[]; total: number }>;
 
-  getMerkleProof(txHash: string): MerkleProofStep[];
+  getMerkleProof(txHash: string): Promise<MerkleProofStep[]>;
   verifyMerkleProof(leafTxHash: string, proof: MerkleProofStep[], merkleRoot: string): boolean;
 
-  stats(): LedgerStats;
+  stats(): Promise<LedgerStats>;
   validators(): { id: string; org: string }[];
   policy(): string;
 
@@ -76,5 +76,5 @@ export interface LedgerService {
    * genesis, prevHash links, block hash recomputation, merkle root recomputation, tx hash recomputation,
    * validator signature verification and quorum. Issues pinpoint blockNumber / txHash / field.
    */
-  validateLedger(): LedgerValidation;
+  validateLedger(): Promise<LedgerValidation>;
 }

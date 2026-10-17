@@ -16,6 +16,7 @@ export const config = {
   isProd: process.env.NODE_ENV === 'production',
   isTest: process.env.VITEST === 'true' || process.env.NODE_ENV === 'test',
   dbFile: path.resolve(PROJECT_ROOT, process.env.DB_FILE ?? 'server/data/textrace.db'),
+  databaseUrl: process.env.DATABASE_URL ?? '',
   uploadsDir: path.resolve(PROJECT_ROOT, process.env.UPLOADS_DIR ?? 'server/data/uploads'),
   distDir: path.resolve(PROJECT_ROOT, 'dist'),
   millName: process.env.MILL_NAME ?? 'Model Spinning Mill — Unit 1',

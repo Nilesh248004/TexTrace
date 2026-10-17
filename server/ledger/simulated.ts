@@ -11,10 +11,10 @@
 // No chain state is cached in memory: the DB can be wiped and re-seeded under us (wipeDb keeps the connection),
 // so head/height/counts are always read from SQLite. Only prepared statements are cached (they survive DROP/CREATE).
 import type { EntityRef, IntegrityIssue, LedgerBlock, LedgerStats, LedgerTx, MerkleProofStep, ValidatorApproval } from '@shared/types';
-import type Database from 'better-sqlite3';
 import { CONTRACTS } from '@shared/permissions';
 import { shortHash } from '@shared/format';
 import type { DB } from '../db';
+import type { DbStatement } from '../db/driver';
 import { canonicalJson, canonicalize, sha256Hex, ZERO_HASH } from '../lib/hash';
 import { merkleProof, merkleRoot, verifyMerkleProof } from './merkle';
 import { POLICY, QUORUM, VALIDATORS, collectApprovals, explainApproval, signBlockHash } from './validators';
@@ -212,7 +212,7 @@ export class SimulatedLedger implements LedgerService {
   // `ReturnType<DB['prepare']>` resolves the generic prepare overload to a single
   // object parameter. Ledger statements use positional bindings (including none),
   // so retain the variadic signature explicitly in the cache.
-  private readonly stmtCache = new Map<string, Database.Statement<[...unknown[]], unknown>>();
+  private readonly stmtCache = new Map<string, DbStatement>();
 
   constructor(
     private readonly db: DB,
@@ -227,7 +227,7 @@ export class SimulatedLedger implements LedgerService {
     for (const id of ids) this.offline.add(id);
   }
 
-  private stmt(sql: string): Database.Statement<[...unknown[]], unknown> {
+  private stmt(sql: string): DbStatement {
     let s = this.stmtCache.get(sql);
     if (!s) {
       s = this.db.prepare(sql);
@@ -236,18 +236,18 @@ export class SimulatedLedger implements LedgerService {
     return s;
   }
 
-  private head(): HeadRow | undefined {
-    return this.stmt(`SELECT number, hash, timestamp FROM ledger_blocks ORDER BY number DESC LIMIT 1`).get() as HeadRow | undefined;
+  private async head(): Promise<HeadRow | undefined> {
+    return await this.stmt(`SELECT number, hash, timestamp FROM ledger_blocks ORDER BY number DESC LIMIT 1`).get() as HeadRow | undefined;
   }
 
-  private inTx<T>(fn: () => T): T {
+  private inTx<T>(fn: () => Promise<T>): Promise<T> {
     return this.db.inTransaction ? fn() : this.db.transaction(fn)();
   }
 
   // ---------------------------------------------------------------------------------------------- writes
-  init(opts?: { timestamp?: string }): void {
-    this.inTx(() => {
-      if (this.head()) return;
+  async init(opts?: { timestamp?: string }): Promise<void> {
+    await this.inTx(async () => {
+      if (await this.head()) return;
       const timestamp = toIso(opts?.timestamp ?? GENESIS_TIMESTAMP, 'Ledger genesis');
       const genesis: PendingTx = {
         contract: 'System',
@@ -266,23 +266,24 @@ export class SimulatedLedger implements LedgerService {
         reason: null,
         entityRefs: [],
       };
-      this.appendBlock([genesis], timestamp, undefined);
+      await this.appendBlock([genesis], timestamp, undefined);
     });
   }
 
-  commit(pending: PendingTx[], opts?: { timestamp?: string }): CommitResult {
+  async commit(pending: PendingTx[], opts?: { timestamp?: string }): Promise<CommitResult> {
     if (!Array.isArray(pending) || pending.length === 0) {
       throw new Error('Ledger commit rejected: a block must contain at least one transaction');
     }
     pending.forEach(assertPendingTx);
     const requestedMs = opts?.timestamp === undefined ? Date.now() : Date.parse(toIso(opts.timestamp, 'Ledger commit'));
-    return this.inTx(() => {
-      let head = this.head();
+    return this.inTx(async () => {
+      if (this.db.dialect === 'postgres') await this.stmt('SELECT pg_advisory_xact_lock(724631928)').get();
+      let head = await this.head();
       if (!head) {
         // Defensive: a commit on an empty chain creates the genesis block first.
         const genesisMs = Math.min(requestedMs, Date.parse(GENESIS_TIMESTAMP));
-        this.init({ timestamp: new Date(genesisMs).toISOString() });
-        head = this.head() as HeadRow;
+        await this.init({ timestamp: new Date(genesisMs).toISOString() });
+        head = await this.head() as HeadRow;
       }
       const headMs = Date.parse(head.timestamp);
       // Clock skew / historical replay: ledger time never goes backwards.
@@ -292,7 +293,7 @@ export class SimulatedLedger implements LedgerService {
   }
 
   /** Seal, endorse (3-of-4) and persist one block on top of `head` (undefined => genesis). */
-  private appendBlock(pending: PendingTx[], timestamp: string, head: HeadRow | undefined): CommitResult {
+  private async appendBlock(pending: PendingTx[], timestamp: string, head: HeadRow | undefined): Promise<CommitResult> {
     const prevHash = head ? head.hash : ZERO_HASH;
     const number = head ? head.number + 1 : 0;
 
@@ -323,7 +324,7 @@ export class SimulatedLedger implements LedgerService {
     };
     const hash = hashBlockHeader(header);
 
-    const approvals = collectApprovals(hash, (validatorId) => this.endorse(validatorId, header, hash, sealed));
+    const approvals = collectApprovals(hash, (validatorId) => this.endorse(validatorId, header, hash, sealed, head));
     const approved = approvals.filter((a) => a.approved).length;
     if (approved < QUORUM) {
       const refusals = approvals
@@ -336,7 +337,7 @@ export class SimulatedLedger implements LedgerService {
       );
     }
 
-    this.stmt(
+    await this.stmt(
       `INSERT INTO ledger_blocks (number, timestamp, prev_hash, merkle_root, hash, tx_count, proposer, approvals)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(number, timestamp, prevHash, header.merkleRoot, hash, header.txCount, PROPOSER, JSON.stringify(approvals));
@@ -344,15 +345,16 @@ export class SimulatedLedger implements LedgerService {
       `INSERT INTO ledger_txs (tx_hash, block_number, idx, timestamp, contract, fn, payload, actor_id, actor_role, status, reason, entity_refs, nonce, field_digests)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
-    const txs: LedgerTx[] = sealed.map((t) => {
+    const txs: LedgerTx[] = [];
+    for (const t of sealed) {
       const c = t.content;
       const payload = t.canon.payload as Record<string, unknown>;
       const entityRefs = t.canon.entityRefs as EntityRef[];
-      insTx.run(
+      await insTx.run(
         t.txHash, number, t.index, timestamp, c.contract, c.fn, JSON.stringify(payload), c.actorId, c.actorRole, c.status, c.reason,
         JSON.stringify(entityRefs), c.nonce, JSON.stringify(t.digests),
       );
-      return {
+      txs.push({
         txHash: t.txHash,
         blockNumber: number,
         index: t.index,
@@ -366,8 +368,8 @@ export class SimulatedLedger implements LedgerService {
         reason: c.reason,
         entityRefs,
         nonce: c.nonce,
-      };
-    });
+      });
+    }
 
     const block: LedgerBlock = { number, timestamp, prevHash, merkleRoot: header.merkleRoot, hash, txCount: header.txCount, proposer: PROPOSER, approvals };
     return { block, txs };
@@ -377,9 +379,8 @@ export class SimulatedLedger implements LedgerService {
    * One validator's independent verification of a proposed block. Reads the chain head itself and recomputes every
    * tx hash from the tx content, the Merkle root and the block hash. Returns null to endorse, else the refusal reason.
    */
-  private endorse(validatorId: string, header: BlockHeader, blockHash: string, txs: SealedTx[]): string | null {
+  private endorse(validatorId: string, header: BlockHeader, blockHash: string, txs: SealedTx[], head: HeadRow | undefined): string | null {
     if (this.offline.has(validatorId)) return 'validator offline — no endorsement response';
-    const head = this.head();
     const expectedNumber = head ? head.number + 1 : 0;
     const expectedPrev = head ? head.hash : ZERO_HASH;
     if (header.number !== expectedNumber) return `block number #${header.number} does not follow the head (expected #${expectedNumber})`;
@@ -403,42 +404,42 @@ export class SimulatedLedger implements LedgerService {
   }
 
   // ---------------------------------------------------------------------------------------------- reads
-  height(): number {
-    const head = this.head();
+  async height(): Promise<number> {
+    const head = await this.head();
     return head ? head.number : -1;
   }
 
-  getBlock(number: number): LedgerBlock | null {
-    const row = this.stmt(`SELECT * FROM ledger_blocks WHERE number = ?`).get(number) as BlockRow | undefined;
+  async getBlock(number: number): Promise<LedgerBlock | null> {
+    const row = await this.stmt(`SELECT * FROM ledger_blocks WHERE number = ?`).get(number) as BlockRow | undefined;
     return row ? blockOf(row) : null;
   }
 
-  listBlocks(offset: number, limit: number): { items: LedgerBlock[]; total: number } {
+  async listBlocks(offset: number, limit: number): Promise<{ items: LedgerBlock[]; total: number }> {
     const lim = clampInt(limit, 0, 1000, 25);
     const off = clampInt(offset, 0, Number.MAX_SAFE_INTEGER, 0);
-    const rows = this.stmt(`SELECT * FROM ledger_blocks ORDER BY number DESC LIMIT ? OFFSET ?`).all(lim, off) as BlockRow[];
-    const total = (this.stmt(`SELECT COUNT(*) AS n FROM ledger_blocks`).get() as { n: number }).n;
-    return { items: rows.map(blockOf), total };
+    const rows = await this.stmt(`SELECT * FROM ledger_blocks ORDER BY number DESC LIMIT ? OFFSET ?`).all<BlockRow>();
+    const count = await this.stmt(`SELECT COUNT(*) AS n FROM ledger_blocks`).get<{ n: number | string }>();
+    return { items: rows.map(blockOf), total: Number(count?.n ?? 0) };
   }
 
-  getBlockTxs(number: number): LedgerTx[] {
-    return (this.stmt(`SELECT * FROM ledger_txs WHERE block_number = ? ORDER BY idx ASC`).all(number) as TxRow[]).map(txOf);
+  async getBlockTxs(number: number): Promise<LedgerTx[]> {
+    return (await this.stmt(`SELECT * FROM ledger_txs WHERE block_number = ? ORDER BY idx ASC`).all<TxRow>(number)).map(txOf);
   }
 
-  getTx(txHash: string): LedgerTx | null {
-    const row = this.stmt(`SELECT * FROM ledger_txs WHERE tx_hash = ?`).get(normHash(txHash)) as TxRow | undefined;
+  async getTx(txHash: string): Promise<LedgerTx | null> {
+    const row = await this.stmt(`SELECT * FROM ledger_txs WHERE tx_hash = ?`).get<TxRow>(normHash(txHash));
     return row ? txOf(row) : null;
   }
 
-  getTxsByEntity(type: string, id: string): LedgerTx[] {
+  async getTxsByEntity(type: string, id: string): Promise<LedgerTx[]> {
     const needle = `"id":${JSON.stringify(String(id))}`.replace(/[\\%_]/g, (c) => `\\${c}`);
-    const rows = this.stmt(
+    const rows = await this.stmt(
       `SELECT * FROM ledger_txs WHERE entity_refs LIKE ? ESCAPE '\\' ORDER BY block_number ASC, idx ASC`,
-    ).all(`%${needle}%`) as TxRow[];
+    ).all<TxRow>(`%${needle}%`);
     return rows.map(txOf).filter((t) => Array.isArray(t.entityRefs) && t.entityRefs.some((r) => r && r.type === type && r.id === id));
   }
 
-  listTxs(filter: { contract?: string; fn?: string; offset: number; limit: number }): { items: LedgerTx[]; total: number } {
+  async listTxs(filter: { contract?: string; fn?: string; offset: number; limit: number }): Promise<{ items: LedgerTx[]; total: number }> {
     const where: string[] = [];
     const params: unknown[] = [];
     if (filter.contract) {
@@ -452,16 +453,16 @@ export class SimulatedLedger implements LedgerService {
     const w = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const lim = clampInt(filter.limit, 0, 1000, 25);
     const off = clampInt(filter.offset, 0, Number.MAX_SAFE_INTEGER, 0);
-    const rows = this.stmt(`SELECT * FROM ledger_txs ${w} ORDER BY block_number DESC, idx DESC LIMIT ? OFFSET ?`).all(...params, lim, off) as TxRow[];
-    const total = (this.stmt(`SELECT COUNT(*) AS n FROM ledger_txs ${w}`).get(...params) as { n: number }).n;
-    return { items: rows.map(txOf), total };
+    const rows = await this.stmt(`SELECT * FROM ledger_txs ${w} ORDER BY block_number DESC, idx DESC LIMIT ? OFFSET ?`).all<TxRow>(...params, lim, off);
+    const count = await this.stmt(`SELECT COUNT(*) AS n FROM ledger_txs ${w}`).get<{ n: number | string }>(...params);
+    return { items: rows.map(txOf), total: Number(count?.n ?? 0) };
   }
 
-  getMerkleProof(txHash: string): MerkleProofStep[] {
+  async getMerkleProof(txHash: string): Promise<MerkleProofStep[]> {
     const h = normHash(txHash);
-    const row = this.stmt(`SELECT block_number, idx FROM ledger_txs WHERE tx_hash = ?`).get(h) as { block_number: number; idx: number } | undefined;
+    const row = await this.stmt(`SELECT block_number, idx FROM ledger_txs WHERE tx_hash = ?`).get<{ block_number: number; idx: number }>(h);
     if (!row) throw new Error(`Merkle proof: transaction ${shortHash(h)} is not on the ledger`);
-    const leaves = (this.stmt(`SELECT tx_hash FROM ledger_txs WHERE block_number = ? ORDER BY idx ASC`).all(row.block_number) as { tx_hash: string }[]).map(
+    const leaves = (await this.stmt(`SELECT tx_hash FROM ledger_txs WHERE block_number = ? ORDER BY idx ASC`).all<{ tx_hash: string }>(row.block_number)).map(
       (r) => r.tx_hash,
     );
     return merkleProof(leaves, leaves.indexOf(h));
@@ -471,29 +472,29 @@ export class SimulatedLedger implements LedgerService {
     return verifyMerkleProof(normHash(leafTxHash), proof, normHash(merkleRootHash));
   }
 
-  stats(): LedgerStats {
-    const b = this.stmt(`SELECT COUNT(*) AS n FROM ledger_blocks`).get() as { n: number };
-    const head = this.head();
-    const t = this.stmt(
+  async stats(): Promise<LedgerStats> {
+    const b = await this.stmt(`SELECT COUNT(*) AS n FROM ledger_blocks`).get<{ n: number | string }>();
+    const head = await this.head();
+    const t = await this.stmt(
       `SELECT COUNT(*) AS n,
               COALESCE(SUM(CASE WHEN status = 'VALID' THEN 1 ELSE 0 END), 0) AS valid,
               COALESCE(SUM(CASE WHEN status = 'INVALID' THEN 1 ELSE 0 END), 0) AS invalid
        FROM ledger_txs`,
-    ).get() as { n: number; valid: number; invalid: number };
-    const byContract = this.stmt(`SELECT contract, COUNT(*) AS count FROM ledger_txs GROUP BY contract ORDER BY count DESC, contract ASC`).all() as {
+    ).get<{ n: number | string; valid: number | string; invalid: number | string }>();
+    const byContract = await this.stmt(`SELECT contract, COUNT(*) AS count FROM ledger_txs GROUP BY contract ORDER BY count DESC, contract ASC`).all<{
       contract: string;
-      count: number;
-    }[];
+      count: number | string;
+    }>();
     return {
       height: head ? head.number : -1,
-      blocks: b.n,
-      transactions: t.n,
-      validTx: t.valid,
-      invalidTx: t.invalid,
+      blocks: Number(b?.n ?? 0),
+      transactions: Number(t?.n ?? 0),
+      validTx: Number(t?.valid ?? 0),
+      invalidTx: Number(t?.invalid ?? 0),
       lastBlockAt: head ? head.timestamp : null,
       validators: this.validators(),
       policy: POLICY,
-      byContract,
+      byContract: byContract.map((row) => ({ ...row, count: Number(row.count) })),
     };
   }
 
@@ -506,9 +507,9 @@ export class SimulatedLedger implements LedgerService {
   }
 
   // ---------------------------------------------------------------------------------------------- integrity
-  validateLedger(): LedgerValidation {
-    const blocks = this.stmt(`SELECT * FROM ledger_blocks ORDER BY number ASC`).all() as BlockRow[];
-    const txRows = this.stmt(`SELECT * FROM ledger_txs ORDER BY block_number ASC, idx ASC`).all() as TxRow[];
+  async validateLedger(): Promise<LedgerValidation> {
+    const blocks = await this.stmt(`SELECT * FROM ledger_blocks ORDER BY number ASC`).all<BlockRow>();
+    const txRows = await this.stmt(`SELECT * FROM ledger_txs ORDER BY block_number ASC, idx ASC`).all<TxRow>();
     const issues: IntegrityIssue[] = [];
     const issue = (i: Omit<IntegrityIssue, 'entityType' | 'entityId'>) => issues.push({ entityType: null, entityId: null, ...i });
 

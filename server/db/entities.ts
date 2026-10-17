@@ -127,9 +127,9 @@ export function recordHashOf(type: string, row: Record<string, unknown>): string
   return hashObject(snapshotOf(type, row));
 }
 
-export function loadRow(db: DB, type: string, id: string): Record<string, unknown> | undefined {
+export async function loadRow(db: DB, type: string, id: string): Promise<Record<string, unknown> | undefined> {
   const d = entityDef(type);
-  return db.prepare(`SELECT * FROM ${d.table} WHERE ${d.idColumn} = ?`).get(id) as Record<string, unknown> | undefined;
+  return await db.prepare(`SELECT * FROM ${d.table} WHERE ${d.idColumn} = ?`).get(id) as Record<string, unknown> | undefined;
 }
 
 /** Field-level diff between an anchored snapshot and the current snapshot (dot paths into JSON fields). */
