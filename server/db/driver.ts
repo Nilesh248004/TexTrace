@@ -1,6 +1,11 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import Database from 'better-sqlite3';
-import { Pool, type PoolClient } from 'pg';
+import pg, { type PoolClient } from 'pg';
+
+const { Pool } = pg;
+type Pool = InstanceType<typeof pg.Pool>;
+// COUNT()/SUM() return bigint (int8); row counts here are far below 2^53, so hand them back as numbers like SQLite does.
+pg.types.setTypeParser(20, (value) => Number(value));
 
 export interface RunResult {
   changes: number;
@@ -23,6 +28,8 @@ export interface DB {
 }
 
 function postgresSql(sql: string): string {
+  // Postgres cannot infer the type of a bare `? IS [NOT] NULL` parameter.
+  sql = sql.replace(/\?(\s+IS\s+(?:NOT\s+)?NULL)/gi, 'CAST(? AS TEXT)$1');
   let output = '';
   let parameter = 0;
   let quote: "'" | '"' | null = null;
@@ -38,7 +45,14 @@ function postgresSql(sql: string): string {
       quote = char;
       output += char;
     } else if (char === '?') output += `$${++parameter}`;
-    else output += char;
+    else if (/[A-Za-z_]/.test(char) && !/[\w$]/.test(sql[i - 1] ?? ' ')) {
+      // Postgres folds unquoted identifiers to lowercase; quote camelCase aliases (e.g. `lot_id lotId`) so row keys keep their case.
+      let end = i + 1;
+      while (end < sql.length && /[\w$]/.test(sql[end])) end++;
+      const word = sql.slice(i, end);
+      output += /^[a-z][a-z0-9_]*[A-Z]/.test(word) ? `"${word}"` : word;
+      i = end - 1;
+    } else output += char;
   }
   return output;
 }

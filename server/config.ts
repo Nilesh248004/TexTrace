@@ -12,7 +12,7 @@ function num(v: string | undefined, d: number): number {
 }
 
 export const config = {
-  port: num(process.env.API_PORT, 4000),
+  port: num(process.env.API_PORT || process.env.PORT, 4000),
   isProd: process.env.NODE_ENV === 'production',
   isTest: process.env.VITEST === 'true' || process.env.NODE_ENV === 'test',
   dbFile: path.resolve(PROJECT_ROOT, process.env.DB_FILE ?? 'server/data/textrace.db'),

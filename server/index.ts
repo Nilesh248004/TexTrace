@@ -8,6 +8,9 @@ import { seedDatabase } from './seed/loader';
 import { createApp } from './app';
 import { attachWebSocket } from './api/ws';
 
+if (config.isProd && config.ledger.validatorSecret === 'textrace-demo-validators') {
+  console.warn('WARNING: LEDGER_VALIDATOR_SECRET is the public demo default. Set a private value before real data is anchored.');
+}
 const db = await openConfiguredDb();
 setDb(db);
 const ledger = new SimulatedLedger(db);
@@ -18,12 +21,13 @@ if (!(await isSeeded(db))) {
   console.log(`TexTrace seeded deterministic demo data in ${Date.now() - started} ms`);
 }
 
-const app = createApp(db, ledger);
-
-if (config.isProd && fs.existsSync(config.distDir)) {
-  app.use(express.static(config.distDir));
-  app.get('*', (_req, res) => res.sendFile(path.join(config.distDir, 'index.html')));
-}
+const api = createApp(db, ledger);
+const app = express();
+// Only /api goes through the API app (its auth middleware rejects everything else); the built UI is served around it.
+if (config.isProd && fs.existsSync(config.distDir)) app.use(express.static(config.distDir));
+app.use((req, res, next) => (req.path.startsWith('/api') ? api(req, res, next) : next()));
+if (config.isProd && fs.existsSync(config.distDir)) app.get('*', (_req, res) => res.sendFile(path.join(config.distDir, 'index.html')));
+else app.use(api);
 
 const server = app.listen(config.port, () => {
   console.log(`TexTrace API listening on http://localhost:${config.port}`);

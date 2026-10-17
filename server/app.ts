@@ -23,6 +23,16 @@ function actorFor(row: Record<string, unknown>): Actor {
 export function createApp(db: DB, ledger: LedgerService, runtime: ContractRuntime = createRuntime(db, ledger)): express.Express {
   const app = express();
   app.disable('x-powered-by');
+  // Express 4 ignores rejected promises from async handlers; forward them to the error handler instead of crashing the process.
+  for (const method of ['use', 'get', 'post', 'put', 'delete'] as const) {
+    const original = (app[method] as (...args: unknown[]) => unknown).bind(app);
+    (app as unknown as Record<string, unknown>)[method] = (...args: unknown[]) => original(...args.map((arg) => {
+      if (typeof arg !== 'function' || arg.length === 4) return arg;
+      return (req: Request, res: Response, next: NextFunction) => {
+        try { Promise.resolve((arg as (...a: unknown[]) => unknown)(req, res, next)).catch(next); } catch (error) { next(error); }
+      };
+    }));
+  }
   app.use(express.json({ limit: '1mb' }));
   const evaluateGateFor = async (lotIds: string[]): Promise<GateResult> => {
     const settings = await getSettings(db);
@@ -300,5 +310,11 @@ export function createApp(db: DB, ledger: LedgerService, runtime: ContractRuntim
   });
 
   app.use((_req, res) => res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: 'API route not found' } }));
+  app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
+    console.error(`[api] ${req.method} ${req.path} failed:`, error);
+    if (res.headersSent) return;
+    const status = (error as { type?: string }).type === 'entity.parse.failed' ? 400 : 500;
+    res.status(status).json({ ok: false, error: { code: status === 400 ? 'BAD_REQUEST' : 'INTERNAL', message: status === 400 ? 'Malformed request body' : 'Internal server error' } });
+  });
   return app;
 }
