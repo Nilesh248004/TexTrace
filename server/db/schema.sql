@@ -528,3 +528,17 @@ CREATE TABLE IF NOT EXISTS pdf_import_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_pdf_import_uploaded_at
   ON pdf_import_jobs(uploaded_at);
+
+
+-- Structured PDF extraction is kept in staging until a separate approved import.
+CREATE TABLE IF NOT EXISTS pdf_import_extractions (
+  id              TEXT PRIMARY KEY,
+  job_id          TEXT NOT NULL UNIQUE,
+  structured_json TEXT NOT NULL,
+  validation_json TEXT NOT NULL,
+  model_name      TEXT NOT NULL,
+  extracted_at    TEXT NOT NULL,
+  updated_by      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pdf_import_extractions_job
+  ON pdf_import_extractions(job_id);
