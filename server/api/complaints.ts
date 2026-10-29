@@ -668,7 +668,7 @@ ${String(source.extracted_text).slice(0, 180000)}`;
       }
 
       try {
-        const action = await runtime.run({
+        const action = await c.runtime.run({
           action: 'pdf-import.import-bale',
           label: 'Import PDF bale ' + sourceId,
           actor: req.actor,
