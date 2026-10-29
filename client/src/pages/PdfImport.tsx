@@ -1,0 +1,281 @@
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { AlertCircle, CheckCircle2, FileText, Loader2, RefreshCw, Upload } from 'lucide-react';
+import { Card, CardBody, PageHead } from '../components/ui';
+import { useSession } from '../lib/store';
+
+type ImportJob = {
+  id: string;
+  fileName: string;
+  sha256: string;
+  pages: number;
+  bytes: number;
+  status: 'PREVIEW' | 'REVIEWED';
+  uploadedAt: string;
+  reviewedAt?: string | null;
+  text?: string;
+  lineCount?: number;
+  headings?: string[];
+  truncated?: boolean;
+};
+
+type Envelope<T> = {
+  ok: boolean;
+  data?: T;
+  error?: { message?: string; code?: string };
+};
+
+async function api<T>(
+  url: string,
+  token: string | null,
+  options: RequestInit = {},
+): Promise<T> {
+  const headers = new Headers(options.headers);
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+
+  const response = await fetch(url, { ...options, headers });
+  const body = await response.json() as Envelope<T>;
+
+  if (!response.ok || !body.ok || body.data === undefined) {
+    throw new Error(body.error?.message || `Request failed (${response.status})`);
+  }
+  return body.data;
+}
+
+export default function PdfImport(): JSX.Element {
+  const { token } = useSession();
+  const [file, setFile] = useState<File | null>(null);
+  const [current, setCurrent] = useState<ImportJob | null>(null);
+  const [jobs, setJobs] = useState<ImportJob[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+
+  const refreshJobs = useCallback(async () => {
+    try {
+      const rows = await api<ImportJob[]>('/api/pdf-import/jobs', token);
+      setJobs(rows);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not load import history');
+    }
+  }, [token]);
+
+  useEffect(() => { void refreshJobs(); }, [refreshJobs]);
+
+  async function uploadPdf(e: FormEvent) {
+    e.preventDefault();
+    if (!file) {
+      setError('Choose a PDF file first.');
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      setError('The PDF must be 8 MB or smaller.');
+      return;
+    }
+
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const result = await api<ImportJob>(
+        '/api/pdf-import/preview',
+        token,
+        { method: 'POST', body: form },
+      );
+      setCurrent(result);
+      setNotice('PDF extracted and saved as a review draft. No production records have been changed.');
+      setFile(null);
+      const input = document.getElementById('pdf-import-file') as HTMLInputElement | null;
+      if (input) input.value = '';
+      await refreshJobs();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'PDF extraction failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openJob(id: string) {
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const job = await api<ImportJob>(`/api/pdf-import/jobs/${encodeURIComponent(id)}`, token);
+      setCurrent(job);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not open import');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function markReviewed() {
+    if (!current) return;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const job = await api<ImportJob>(
+        `/api/pdf-import/${encodeURIComponent(current.id)}/review`,
+        token,
+        { method: 'POST' },
+      );
+      setCurrent(job);
+      setNotice('Review status saved. Extracted data is still staged; business tables have not been changed.');
+      await refreshJobs();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not save review status');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function downloadText() {
+    if (!current?.text) return;
+    const blob = new Blob([current.text], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${current.fileName.replace(/\.pdf$/i, '')}-extracted.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return <div className="page">
+    <PageHead eyebrow="DATA MANAGEMENT" title="PDF Import" />
+    <Card>
+      <CardBody>
+        <div className="stack" style={{ gap: 14 }}>
+          <div>
+            <h3 style={{ margin: '0 0 6px' }}>Upload historical factory records</h3>
+            <p className="muted small" style={{ margin: 0 }}>
+              Upload a text-based PDF containing lot, bale, mix, production, packing,
+              quality, order or dispatch information.
+            </p>
+          </div>
+          <form onSubmit={uploadPdf} className="stack" style={{ gap: 12 }}>
+            <label htmlFor="pdf-import-file"><b>Select PDF file</b></label>
+            <input
+              id="pdf-import-file"
+              className="input"
+              type="file"
+              accept="application/pdf,.pdf"
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              disabled={busy}
+            />
+            {file && <div className="small muted">
+              {file.name} · {(file.size / 1024 / 1024).toFixed(2)} MB
+            </div>}
+            <div>
+              <button className="btn primary" type="submit" disabled={busy || !file}>
+                {busy ? <Loader2 size={16} /> : <Upload size={16} />}
+                {busy ? 'Processing…' : 'Upload and extract PDF'}
+              </button>
+            </div>
+          </form>
+        </div>
+      </CardBody>
+    </Card>
+
+    {error && <Card><CardBody>
+      <div className="row" style={{ gap: 8, color: 'hsl(var(--bad-foreground))' }}>
+        <AlertCircle size={18} /><span>{error}</span>
+      </div>
+    </CardBody></Card>}
+
+    {notice && <Card><CardBody>
+      <div className="row" style={{ gap: 8, color: 'hsl(var(--good-foreground))' }}>
+        <CheckCircle2 size={18} /><span>{notice}</span>
+      </div>
+    </CardBody></Card>}
+
+    {current && <Card>
+      <CardBody>
+        <div className="row between" style={{ alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+          <div>
+            <div className="row" style={{ gap: 8 }}>
+              <FileText size={20} />
+              <h3 style={{ margin: 0 }}>{current.fileName}</h3>
+            </div>
+            <p className="muted small">
+              {current.pages} page(s) · {current.lineCount ?? 0} lines · Import ID: {current.id}
+            </p>
+          </div>
+          <span className={`pill ${current.status === 'REVIEWED' ? 'green' : 'blue'}`}>
+            {current.status}
+          </span>
+        </div>
+
+        {current.headings?.length ? <>
+          <h4>Possible section headings</h4>
+          <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+            {current.headings.map((heading, i) =>
+              <span className="pill gray" key={`${heading}-${i}`}>{heading}</span>
+            )}
+          </div>
+        </> : null}
+
+        {current.truncated && <p className="small muted">
+          Preview is limited to the first 250,000 characters. The original extracted text was longer.
+        </p>}
+
+        <h4>Extracted text preview</h4>
+        <textarea
+          className="input"
+          readOnly
+          rows={18}
+          value={current.text ?? 'No extracted text is available.'}
+          style={{ width: '100%', resize: 'vertical', fontFamily: 'monospace', whiteSpace: 'pre' }}
+          aria-label="Extracted PDF text"
+        />
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+          <button className="btn" type="button" onClick={downloadText} disabled={!current.text}>
+            <FileText size={16} /> Download extracted text
+          </button>
+          {current.status !== 'REVIEWED' && <button className="btn primary" type="button" onClick={() => void markReviewed()} disabled={busy}>
+            <CheckCircle2 size={16} /> Mark review complete
+          </button>}
+        </div>
+      </CardBody>
+    </Card>}
+
+    <Card>
+      <CardBody>
+        <div className="row between" style={{ gap: 12, flexWrap: 'wrap' }}>
+          <h3 style={{ margin: 0 }}>Recent PDF imports</h3>
+          <button className="btn ghost" type="button" onClick={() => void refreshJobs()} disabled={busy}>
+            <RefreshCw size={15} /> Refresh
+          </button>
+        </div>
+        {!jobs.length ? <p className="muted small">No PDF import drafts yet.</p> :
+          <div className="stack" style={{ gap: 8, marginTop: 12 }}>
+            {jobs.map((job) => <div key={job.id} className="row between" style={{ gap: 12, padding: '10px 0', borderTop: '1px solid hsl(var(--border))' }}>
+              <div style={{ minWidth: 0 }}>
+                <b>{job.fileName}</b>
+                <div className="muted small">{job.pages} page(s) · {job.uploadedAt} · {job.status}</div>
+              </div>
+              <button className="btn ghost" type="button" onClick={() => void openJob(job.id)}>Open</button>
+            </div>)}
+          </div>}
+      </CardBody>
+    </Card>
+
+    <Card>
+      <CardBody>
+        <div className="row" style={{ alignItems: 'flex-start', gap: 10 }}>
+          <AlertCircle size={18} />
+          <div className="small">
+            <b>Import safety</b>
+            <p className="muted" style={{ margin: '4px 0 0' }}>
+              This version extracts text and stores a review draft in Neon. It does not yet
+              insert lots, mixes, bale links or QA results into the production tables.
+              Scanned image-only PDFs need OCR, which is not enabled in this version.
+              Review the extracted content before using it as a source for production records.
+            </p>
+          </div>
+        </div>
+      </CardBody>
+    </Card>
+  </div>;
+}
