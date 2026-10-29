@@ -362,6 +362,10 @@ export function complaintsRouter(c: ApiCtx): Router {
 
     const client = new GoogleGenAI({
       apiKey: config.gemini.apiKey,
+      httpOptions: {
+        timeout: 25000,
+        retryOptions: { attempts: 1 },
+      },
     });
 
     try {
@@ -380,43 +384,39 @@ ${String(source.extracted_text).slice(0, 180000)}`;
         'gemini-3.6-flash',
       ])];
 
-      for (const model of modelsToTry) {
-        for (let attempt = 0; attempt < 3; attempt++) {
-          try {
-            response = await client.models.generateContent({
-              model,
-              contents: prompt,
-              config: {
-                systemInstruction: system,
-                responseMimeType: 'application/json',
-                temperature: 0.1,
-              },
-            });
-            break;
-          } catch (error) {
-            lastError = error;
-            const status = Number(
-              (error as { status?: unknown } | null)?.status
-            );
+      for (const [index, model] of modelsToTry.entries()) {
+        try {
+          console.info(`[pdf-import] Trying model ${model} for job ${String(source.id)}`);
 
-            // Retry only temporary service or rate-limit errors.
-            if (![408, 429, 500, 502, 503, 504].includes(status)) {
-              throw error;
-            }
+          response = await client.models.generateContent({
+            model,
+            contents: prompt,
+            config: {
+              systemInstruction: system,
+              responseMimeType: 'application/json',
+              temperature: 0.1,
+              maxOutputTokens: 10000,
+            },
+          });
+          break;
+        } catch (error) {
+          lastError = error;
+          const status = Number(
+            (error as { status?: unknown } | null)?.status
+          );
+          const transient = [408, 429, 500, 502, 503, 504].includes(status);
+          const hasFallback = index < modelsToTry.length - 1;
 
-            if (attempt < 2) {
-              const delayMs =
-                1000 * (2 ** attempt) + Math.floor(Math.random() * 300);
-              await new Promise((resolve) => setTimeout(resolve, delayMs));
-            }
-          }
+          if (!transient || !hasFallback) throw error;
+
+          console.warn(
+            `[pdf-import] Model ${model} failed with status ${status}; trying fallback model once.`
+          );
         }
-
-        if (response) break;
       }
 
       if (!response) {
-        throw lastError ?? new Error('All Gemini model attempts failed.');
+        throw lastError ?? new Error('Gemini extraction failed for all configured models.');
       }
 
       const output = (response.text ?? '')
