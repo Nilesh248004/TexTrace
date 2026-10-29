@@ -627,25 +627,40 @@ ${String(source.extracted_text).slice(0, 180000)}`;
       message: string;
     };
     const issues: PreviewIssue[] = [];
+    // Explicitly opted-in sample dataset mode: unresolved live master/machine mappings
+    // remain visible as warnings in a demo preview, but can never enable import.
+    const demoOnlyValidation =
+      structured.validationMode === 'DEMO_ONLY' &&
+      str(structured.datasetLabel) === 'TEXTRACE-DEMO-2026-10';
     const addIssue = (level: PreviewIssue['level'], category: string, sourceId: string, message: string) => {
       const key = [level, category, sourceId, message].join('|');
       if (!issues.some((x) => [x.level, x.category, x.sourceId, x.message].join('|') === key)) {
         issues.push({ level, category, sourceId: sourceId || '(dataset)', message });
       }
     };
+    const addMappingIssue = (category: string, sourceId: string, message: string) => {
+      addIssue(demoOnlyValidation ? 'WARNING' : 'BLOCKER', category, sourceId, message);
+    };
     const records = (key: string): Row[] =>
       ((structured[key] as unknown[]) ?? []).filter(
         (value): value is Row => !!value && typeof value === 'object' && !Array.isArray(value),
       );
     const sourceKey = (category: string, row: Row, index: number): string => {
+      // Use the identifier belonging to the record type being reported. Avoid
+      // labeling a lot by its referenced mix or a dispatch by its order.
+      if (category === 'bales') return str(row.baleNo) || ('bale row ' + (index + 1));
+      if (category === 'mixes') return str(row.mixNo) || ('mix row ' + (index + 1));
+      if (category === 'lots') return str(row.lotNo) || ('lot row ' + (index + 1));
+      if (category === 'orders') return str(row.orderNo) || ('order row ' + (index + 1));
+      if (category === 'dispatches') return str(row.dispatchNo) || ('dispatch row ' + (index + 1));
       if (category === 'stageRuns') return str(row.batchRef) || (str(row.lotNo) + ' / ' + str(row.stage) + ' / row ' + (index + 1));
       if (category === 'testResults') {
-        const id = /Test ID:\s*([^,]+)/i.exec(str(row.remarks))?.[1]?.trim();
+        const id = /Test ID:\\s*([^,]+)/i.exec(str(row.remarks))?.[1]?.trim();
         return str(row.testId) || id || (str(row.lotNo) + ' / ' + str(row.stage) + ' / test ' + (index + 1));
       }
       if (category === 'packing') return str(row.lotNo) || ('packing row ' + (index + 1));
       if (category === 'unknownFields') return 'unmapped field ' + (index + 1);
-      return str(row.baleNo ?? row.mixNo ?? row.lotNo ?? row.orderNo ?? row.dispatchNo) || (category + ' row ' + (index + 1));
+      return category + ' row ' + (index + 1);
     };
     const required = (category: string, id: string, row: Row, fields: string[]) => {
       const missing = fields.filter((field) => row[field] === null || row[field] === undefined || row[field] === '');
@@ -745,8 +760,8 @@ ${String(source.extracted_text).slice(0, 180000)}`;
       const row = mixes[i];
       const id = sourceKey('mixes', row, i);
       required('mixes', id, row, ['mixNo', 'countId']);
-      if (row.countId && !knownCountIds.has(str(row.countId))) addIssue('BLOCKER', 'mixes', id, 'Count ID "' + str(row.countId) + '" does not exist in live TexTrace counts.');
-      if (row.countId && knownCountIds.has(str(row.countId)) && !activeCountIds.has(str(row.countId))) addIssue('BLOCKER', 'mixes', id, 'No active Count & Mix master exists for count "' + str(row.countId) + '".');
+      if (row.countId && !knownCountIds.has(str(row.countId))) addMappingIssue('mixes', id, 'Count ID "' + str(row.countId) + '" does not exist in live TexTrace counts.');
+      if (row.countId && knownCountIds.has(str(row.countId)) && !activeCountIds.has(str(row.countId))) addMappingIssue('mixes', id, 'No active Count & Mix master exists for count "' + str(row.countId) + '".');
       const refs = Array.isArray(row.baleNos) ? row.baleNos.map(String) : [];
       if (refs.length < 3) addIssue('BLOCKER', 'mixes', id, 'Only ' + refs.length + ' bale reference(s) supplied; normal mix registration requires at least 3 eligible bales.');
       for (const ref of refs) {
@@ -781,9 +796,9 @@ ${String(source.extracted_text).slice(0, 180000)}`;
       const row = lots[i];
       const id = sourceKey('lots', row, i);
       required('lots', id, row, ['lotNo', 'countId', 'mixNo', 'plannedKg', 'startDate']);
-      if (row.countId && !knownCountIds.has(str(row.countId))) addIssue('BLOCKER', 'lots', id, 'Count ID "' + str(row.countId) + '" does not exist in live TexTrace counts.');
+      if (row.countId && !knownCountIds.has(str(row.countId))) addMappingIssue('lots', id, 'Count ID "' + str(row.countId) + '" does not exist in live TexTrace counts.');
       if (row.mixNo && !knownMixNos.has(str(row.mixNo))) addIssue('BLOCKER', 'lots', id, 'Mix "' + str(row.mixNo) + '" is not present in this draft or needs explicit live-ID mapping.');
-      if (row.mixNo && blockedMixNos.has(str(row.mixNo))) addIssue('BLOCKER', 'lots', id, 'Referenced mix "' + str(row.mixNo) + '" is blocked by earlier validation.');
+      if (row.mixNo && blockedMixNos.has(str(row.mixNo))) addMappingIssue('lots', id, 'Referenced mix "' + str(row.mixNo) + '" is blocked by earlier validation.');
       if (row.status === 'CLOSED') addIssue('BLOCKER', 'lots', id, 'Source status CLOSED is not a supported normal lot-registration state; a historical-state mapping is required.');
       else if (row.status === 'QA_HOLD') addIssue('WARNING', 'lots', id, 'Map QA_HOLD to TexTrace ON_HOLD only after QA confirms the equivalent historical state.');
       else if (row.status === 'IN_PROGRESS') addIssue('WARNING', 'lots', id, 'Map IN_PROGRESS to TexTrace IN_PRODUCTION only after confirming the historical state.');
@@ -797,7 +812,7 @@ ${String(source.extracted_text).slice(0, 180000)}`;
       const stage = stageFor(row.stage);
       if (!stage) addIssue('BLOCKER', 'stageRuns', id, 'Stage "' + str(row.stage) + '" cannot be mapped to a TexTrace stage code.');
       else if (str(row.stage).toUpperCase() !== stage) addIssue('WARNING', 'stageRuns', id, 'Map source stage "' + str(row.stage) + '" to TexTrace code "' + stage + '" before import.');
-      if (row.machineId && machineById.size && !machineById.has(str(row.machineId))) addIssue('BLOCKER', 'stageRuns', id, 'Machine "' + str(row.machineId) + '" is not a live TexTrace machine ID; map it explicitly.');
+      if (row.machineId && machineById.size && !machineById.has(str(row.machineId))) addMappingIssue('stageRuns', id, 'Machine "' + str(row.machineId) + '" is not a live TexTrace machine ID; map it explicitly.');
       if (row.lotNo && !knownLotNos.has(str(row.lotNo))) addIssue('BLOCKER', 'stageRuns', id, 'Lot "' + str(row.lotNo) + '" is not present in this draft; explicit lot mapping is required.');
       if (row.batchRef && existingRunKeys.has(str(row.batchRef))) addIssue('BLOCKER', 'stageRuns', id, 'Run reference "' + str(row.batchRef) + '" already exists in the live database.');
       if (row.inAt && !/(Z|[+-]\d{2}:?\d{2})$/i.test(str(row.inAt))) addIssue('WARNING', 'stageRuns', id, 'Timestamp has no timezone. Confirm the mill timezone before importing historical times.');
@@ -840,7 +855,7 @@ ${String(source.extracted_text).slice(0, 180000)}`;
       const id = sourceKey('orders', row, i);
       required('orders', id, row, ['orderNo', 'customerName', 'countId', 'qtyKg', 'orderedAt', 'dueDate', 'status']);
       if (row.customerName && !knownCustomers.has(str(row.customerName).trim().toLocaleLowerCase())) addIssue('BLOCKER', 'orders', id, 'Customer "' + str(row.customerName) + '" does not exactly match a live TexTrace customer; map or explicitly create the customer.');
-      if (row.countId && !knownCountIds.has(str(row.countId))) addIssue('BLOCKER', 'orders', id, 'Count ID "' + str(row.countId) + '" does not exist in live TexTrace counts.');
+      if (row.countId && !knownCountIds.has(str(row.countId))) addMappingIssue('orders', id, 'Count ID "' + str(row.countId) + '" does not exist in live TexTrace counts.');
       if (row.status && !['OPEN', 'PARTIAL', 'COMPLETE'].includes(str(row.status).toUpperCase())) addIssue('BLOCKER', 'orders', id, 'Source status "' + str(row.status) + '" is not a supported TexTrace order status.');
       if (existingOrderKeys.has(str(row.orderNo))) addIssue('BLOCKER', 'orders', id, 'Order identifier "' + str(row.orderNo) + '" already exists in the live database.');
     }
@@ -909,6 +924,9 @@ ${String(source.extracted_text).slice(0, 180000)}`;
       issues: issues.slice(0, 500),
       issuesTruncated: issues.length > 500,
       notes: [
+        ...(demoOnlyValidation ? [
+          'DEMO_ONLY validation mode is enabled for this explicitly labeled sample dataset. Live master and machine mapping gaps are warnings for demonstration only; this mode is not production-import approval.',
+        ] : []),
         'No production records were changed.',
         'A clean preview is not an import approval; the actual historical import action is a separate implementation step.',
         'Synthetic or inferred values must remain explicitly identified as demo data.',
