@@ -276,7 +276,7 @@ export default function PdfImport(): JSX.Element {
       const result = await api<ImportResult>(
         `/api/pdf-import/${encodeURIComponent(current.id)}/import-ready`,
         token,
-        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmDemoData: isDemoDataset }) },
       );
       setImportResult(result);
       setNotice(`Partial import finished: ${result.summary.imported} imported, ${result.summary.skipped} skipped, ${result.summary.failed} failed.`);
