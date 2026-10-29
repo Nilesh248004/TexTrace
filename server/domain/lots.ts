@@ -24,7 +24,7 @@ export function chainOf(type: string, row: Row): OnChainRef {
 
 export interface LotBundle {
   lot: Row;
-  mix: Row;
+  mix: Row | null;
   count: Row;
   runs: Row[];
   tests: Row[];
@@ -63,7 +63,7 @@ export class LotData {
     const cm = new Map(cmp.map((c) => [str(c.lot_id), num(c.n)]));
     for (const lot of lots) {
       d.lots.set(str(lot.id), {
-        lot, mix: d.mixes.get(str(lot.mix_id)) as Row, count: d.counts.get(str(lot.count_id)) as Row,
+        lot, mix: d.mixes.get(str(lot.mix_id)) ?? null, count: d.counts.get(str(lot.count_id)) as Row,
         runs: runs.filter((r) => r.lot_id === lot.id), tests: tests.filter((t) => t.lot_id === lot.id), packing: packs.find((p) => p.lot_id === lot.id) ?? null,
         dispatches: dls.filter((x) => x._lot_id === lot.id), complaintCount: cm.get(str(lot.id)) ?? 0,
       });
@@ -254,9 +254,9 @@ export async function buildPassport(db: DB, key: string, mode: JudgeMode, nowIso
     chain: chain('bale', x),
   }));
   const otherLots = await db.prepare('SELECT id,lot_no,status FROM lots WHERE mix_id=? AND id<>? ORDER BY seq').all<Row>(str(b.lot.mix_id), str(b.lot.id));
-  const mixRecipe = parse<{ key: string; label: string; source: string; pct: number; kg: number; minPct: number; maxPct: number }[]>(b.mix.recipe, []).map((c) => ({ ...c, color: (c.pct >= c.minPct && c.pct <= c.maxPct ? 'green' : c.pct >= c.minPct - 3 && c.pct <= c.maxPct + 3 ? 'yellow' : 'red') as QualityColor }));
-  chain('mix', b.mix);
-  const fibre = PARAMS.filter((p) => p.kind === 'FIBRE').map((p) => book.judge(countId, 'COUNT_MIX', 'MIX', p.key, parse<Record<string, number>>(b.mix.fibre, {})[p.key] ?? null, startDay, mode));
+  const mixRecipe = parse<{ key: string; label: string; source: string; pct: number; kg: number; minPct: number; maxPct: number }[]>(b.mix?.recipe, []).map((c) => ({ ...c, color: (c.pct >= c.minPct && c.pct <= c.maxPct ? 'green' : c.pct >= c.minPct - 3 && c.pct <= c.maxPct + 3 ? 'yellow' : 'red') as QualityColor }));
+  if (b.mix) chain('mix', b.mix);
+  const fibre = PARAMS.filter((p) => p.kind === 'FIBRE').map((p) => book.judge(countId, 'COUNT_MIX', 'MIX', p.key, parse<Record<string, number>>(b.mix?.fibre, {})[p.key] ?? null, startDay, mode));
 
   // quality
   const machineOf = (id: unknown) => d.machineLabel(id);
@@ -359,9 +359,9 @@ export async function buildPassport(db: DB, key: string, mode: JudgeMode, nowIso
   const blocks = chains.map((c) => c.blockNumber).filter((x): x is number => typeof x === 'number');
   return {
     mode, generatedAt: nowIso,
-    lot: { ...summary, startDate: str(b.lot.start_date), endDate: (b.lot.end_date as string) ?? null, qaReleaseAt: (b.lot.qa_release_at as string) ?? null, qaReleaseBy: b.lot.qa_release_by ? d.userName(b.lot.qa_release_by) : null, mixKg: num(b.mix.total_kg) },
+    lot: { ...summary, startDate: str(b.lot.start_date), endDate: (b.lot.end_date as string) ?? null, qaReleaseAt: (b.lot.qa_release_at as string) ?? null, qaReleaseBy: b.lot.qa_release_by ? d.userName(b.lot.qa_release_by) : null, mixKg: num(b.mix?.total_kg) },
     masters,
-    mix: { id: str(b.mix.id), mixNo: str(b.mix.mix_no), formedAt: str(b.mix.planned_at) || null, issuedAt: (b.mix.issued_at as string) ?? null, totalKg: num(b.mix.total_kg), blowRoomLine: (b.mix.blow_room_line as string) ?? null, recipe: mixRecipe, fibre, otherLots: otherLots.map((l) => ({ lotId: str(l.id), lotNo: str(l.lot_no), status: str(l.status) })) },
+    mix: { id: str(b.mix?.id), mixNo: str(b.mix?.mix_no) || 'Unavailable', formedAt: str(b.mix?.planned_at) || null, issuedAt: (b.mix?.issued_at as string) ?? null, totalKg: num(b.mix?.total_kg), blowRoomLine: (b.mix?.blow_room_line as string) ?? null, recipe: mixRecipe, fibre, otherLots: otherLots.map((l) => ({ lotId: str(l.id), lotNo: str(l.lot_no), status: str(l.status) })) },
     bales, journey: journeyOf(b, d.machines, d.users, judged.stageColor), quality, production, accessories, packing, dispatch,
     summary: { realization, targetRealizationPct: mixMeta?.targetRealizationPct ?? null, targetWastePct: mixMeta?.targetWastePct ?? null, wastePct: yarnKg !== null && brIn > 0 ? r1(100 - (yarnKg / brIn) * 100, 1) : null, cottonKg: r1(brIn), yarnKg, stageYield },
     complaints: cmps.map((c) => ({ id: str(c.id), complaintNo: str(c.complaint_no), type: c.type as never, status: c.status as never, customerName: str(c.customer_name), receivedDate: str(c.received_date), description: str(c.description), rootCause: (c.root_cause as string) ?? null })),
