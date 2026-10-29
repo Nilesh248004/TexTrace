@@ -24,6 +24,7 @@ const MasterEditor = page(() => import('./pages/MasterEditor'));
 const Analytics = page(() => import('./pages/Analytics'));
 const Customers = page(() => import('./pages/Customers'));
 const Developer = page(() => import('./pages/Developer'));
+const PdfImport = page(() => import('./pages/PdfImport'));
 const PublicPassport = page(() => import('./pages/PublicPassport'));
 const PortalShell = page(() => import('./portal/PortalShell'));
 const PortalHome = page(() => import('./portal/PortalHome'));
@@ -57,6 +58,7 @@ export default function App(): JSX.Element {
           <Route path="complaints" element={<Complaints />} /><Route path="complaints/new" element={<ComplaintNew />} /><Route path="complaints/:id" element={<ComplaintWorkspace />} />
           <Route path="masters" element={<Masters />} /><Route path="masters/:versionId" element={<MasterEditor />} /><Route path="analytics" element={<Analytics />} />
           <Route path="customers" element={<Customers />} /><Route path="developer" element={<Developer />} />
+          <Route path="pdf-import" element={<PdfImport />} />
           <Route path="portal/*" element={<Navigate to="/" replace />} /><Route path="*" element={<NotFound />} />
         </Route>
       </>}
