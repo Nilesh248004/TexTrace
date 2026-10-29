@@ -638,14 +638,21 @@ ${String(source.extracted_text).slice(0, 180000)}`;
         (value): value is Row => !!value && typeof value === 'object' && !Array.isArray(value),
       );
     const sourceKey = (category: string, row: Row, index: number): string => {
+      // Use the identifier belonging to the record type being reported. Avoid
+      // labeling a lot by its referenced mix or a dispatch by its order.
+      if (category === 'bales') return str(row.baleNo) || ('bale row ' + (index + 1));
+      if (category === 'mixes') return str(row.mixNo) || ('mix row ' + (index + 1));
+      if (category === 'lots') return str(row.lotNo) || ('lot row ' + (index + 1));
+      if (category === 'orders') return str(row.orderNo) || ('order row ' + (index + 1));
+      if (category === 'dispatches') return str(row.dispatchNo) || ('dispatch row ' + (index + 1));
       if (category === 'stageRuns') return str(row.batchRef) || (str(row.lotNo) + ' / ' + str(row.stage) + ' / row ' + (index + 1));
       if (category === 'testResults') {
-        const id = /Test ID:\s*([^,]+)/i.exec(str(row.remarks))?.[1]?.trim();
+        const id = /Test ID:\\s*([^,]+)/i.exec(str(row.remarks))?.[1]?.trim();
         return str(row.testId) || id || (str(row.lotNo) + ' / ' + str(row.stage) + ' / test ' + (index + 1));
       }
       if (category === 'packing') return str(row.lotNo) || ('packing row ' + (index + 1));
       if (category === 'unknownFields') return 'unmapped field ' + (index + 1);
-      return str(row.baleNo ?? row.mixNo ?? row.lotNo ?? row.orderNo ?? row.dispatchNo) || (category + ' row ' + (index + 1));
+      return category + ' row ' + (index + 1);
     };
     const required = (category: string, id: string, row: Row, fields: string[]) => {
       const missing = fields.filter((field) => row[field] === null || row[field] === undefined || row[field] === '');
