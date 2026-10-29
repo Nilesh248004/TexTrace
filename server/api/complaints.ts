@@ -624,6 +624,9 @@ ${String(source.extracted_text).slice(0, 180000)}`;
     const demoOnly =
       structured.validationMode === 'DEMO_ONLY' &&
       str(structured.datasetLabel) === 'TEXTRACE-DEMO-2026-10';
+    if (demoOnly && req.body?.confirmDemoData !== true) {
+      return fail(res, 409, 'DEMO_IMPORT_CONFIRMATION_REQUIRED', 'This is a synthetic demo dataset. Explicitly confirm demo-data import before writing any demo records.');
+    }
     const rows = (structured.bales as unknown[]).filter(
       (value): value is Row => !!value && typeof value === 'object' && !Array.isArray(value),
     );
