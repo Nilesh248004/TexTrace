@@ -29,6 +29,21 @@ type ImportJob = {
   truncated?: boolean;
 };
 
+type ImportPreview = {
+  jobId: string;
+  fileName: string;
+  generatedAt: string;
+  dryRun: boolean;
+  productionWrites: boolean;
+  importActionAvailable: boolean;
+  readiness: 'BLOCKED' | 'NEEDS_REVIEW' | 'READY_FOR_APPROVAL';
+  summary: { recordCount: number; blockerCount: number; warningCount: number };
+  categories: Array<{ key: string; label: string; total: number; ready: number; blocked: number; needsReview: number }>;
+  issues: Array<{ level: 'BLOCKER' | 'WARNING'; category: string; sourceId: string; message: string }>;
+  issuesTruncated: boolean;
+  notes: string[];
+};
+
 type Envelope<T> = {
   ok: boolean;
   data?: T;
@@ -61,6 +76,7 @@ export default function PdfImport(): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
 
   const refreshJobs = useCallback(async () => {
     try {
@@ -116,6 +132,7 @@ export default function PdfImport(): JSX.Element {
       const job = await api<ImportJob>(`/api/pdf-import/jobs/${encodeURIComponent(id)}`, token);
       setCurrent(job);
       setStructuredDraft(job.structured ? JSON.stringify(job.structured, null, 2) : '');
+      setImportPreview(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not open import');
     } finally {
@@ -136,6 +153,7 @@ export default function PdfImport(): JSX.Element {
       );
       setCurrent(job);
       setStructuredDraft(JSON.stringify(job.structured ?? {}, null, 2));
+      setImportPreview(null);
       setNotice('Structured extraction completed. Review every field and validation warning before proceeding.');
       await refreshJobs();
     } catch (e) {
@@ -174,6 +192,7 @@ export default function PdfImport(): JSX.Element {
       );
       setCurrent(job);
       setStructuredDraft(JSON.stringify(job.structured ?? {}, null, 2));
+      setImportPreview(null);
       setNotice('Structured draft saved and revalidated. No production records were changed.');
       await refreshJobs();
     } catch (e) {
@@ -199,6 +218,27 @@ export default function PdfImport(): JSX.Element {
       await refreshJobs();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not save review status');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function prepareImportPreview() {
+    if (!current) return;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    setImportPreview(null);
+    try {
+      const result = await api<ImportPreview>(
+        `/api/pdf-import/${encodeURIComponent(current.id)}/import-preview`,
+        token,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
+      );
+      setImportPreview(result);
+      setNotice('Read-only import preview completed. No production records were changed.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not prepare import preview');
     } finally {
       setBusy(false);
     }
@@ -353,9 +393,61 @@ export default function PdfImport(): JSX.Element {
           <button className="btn" type="button" onClick={downloadText} disabled={!current.text}>
             <FileText size={16} /> Download extracted text
           </button>
+          {current.structured && <button className="btn" type="button" onClick={() => void prepareImportPreview()} disabled={busy}>
+            {busy ? <Loader2 size={16} /> : <RefreshCw size={16} />} Check import readiness
+          </button>}
           {current.status !== 'REVIEWED' && <button className="btn primary" type="button" onClick={() => void markReviewed()} disabled={busy}>
             <CheckCircle2 size={16} /> Mark review complete
           </button>}
+        </div>
+      </CardBody>
+    </Card>}
+
+    {importPreview && <Card>
+      <CardBody>
+        <div className="row between" style={{ gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+          <div>
+            <h3 style={{ margin: '0 0 6px' }}>Import readiness report</h3>
+            <p className="muted small" style={{ margin: 0 }}>
+              Read-only dry run for {importPreview.fileName}. Generated {new Date(importPreview.generatedAt).toLocaleString()}.
+            </p>
+          </div>
+          <span className={`pill ${importPreview.readiness === 'BLOCKED' ? 'red' : importPreview.readiness === 'NEEDS_REVIEW' ? 'blue' : 'green'}`}>
+            {importPreview.readiness.replaceAll('_', ' ')}
+          </span>
+        </div>
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+          <span className="pill gray">Records: {importPreview.summary.recordCount}</span>
+          <span className="pill red">Blockers: {importPreview.summary.blockerCount}</span>
+          <span className="pill blue">Warnings: {importPreview.summary.warningCount}</span>
+        </div>
+        <div style={{ overflowX: 'auto', marginTop: 12 }}>
+          <table className="table">
+            <thead><tr><th>Record type</th><th>Total</th><th>Ready</th><th>Blocked</th><th>Needs review</th></tr></thead>
+            <tbody>{importPreview.categories.map((category) => <tr key={category.key}>
+              <td>{category.label}</td><td>{category.total}</td><td>{category.ready}</td><td>{category.blocked}</td><td>{category.needsReview}</td>
+            </tr>)}</tbody>
+          </table>
+        </div>
+        <h4>Issues to resolve</h4>
+        {!importPreview.issues.length ? <p className="small">No row-level issues were found in this dry run.</p> :
+          <div className="stack" style={{ gap: 8 }}>
+            {importPreview.issues.map((issue, index) => <div key={`${issue.level}-${issue.category}-${issue.sourceId}-${index}`} style={{ border: '1px solid hsl(var(--border))', borderRadius: 8, padding: 10 }}>
+              <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                <span className={`pill ${issue.level === 'BLOCKER' ? 'red' : 'blue'}`}>{issue.level}</span>
+                <b>{issue.category}</b><span className="muted small">{issue.sourceId}</span>
+              </div>
+              <p className="small" style={{ margin: '6px 0 0' }}>{issue.message}</p>
+            </div>)}
+          </div>}
+        {importPreview.issuesTruncated && <p className="muted small">Only the first 500 issues are shown. Refine the draft and run the preview again.</p>}
+        <div style={{ marginTop: 12, padding: 12, border: '1px solid hsl(var(--border))', borderRadius: 8 }}>
+          <b>Safety status: dry run only</b>
+          <p className="muted small" style={{ margin: '4px 0 0' }}>
+            Production writes: {importPreview.productionWrites ? 'enabled' : 'none'}. Actual import: {importPreview.importActionAvailable ? 'available' : 'not enabled yet'}.
+            This report is a readiness check, not approval to import historical records.
+          </p>
+          <ul className="muted small">{importPreview.notes.map((note, index) => <li key={index}>{note}</li>)}</ul>
         </div>
       </CardBody>
     </Card>}
