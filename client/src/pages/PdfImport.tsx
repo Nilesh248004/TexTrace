@@ -3,7 +3,18 @@ import { AlertCircle, CheckCircle2, FileText, Loader2, RefreshCw, Upload } from 
 import { Card, CardBody, PageHead } from '../components/ui';
 import { useSession } from '../lib/store';
 
+type PdfValidation = {
+  errors: string[];
+  warnings: string[];
+  counts: Record<string, number>;
+};
+
 type ImportJob = {
+  structured?: Record<string, unknown> | null;
+  validation?: PdfValidation | null;
+  modelName?: string | null;
+  extractedAt?: string | null;
+
   id: string;
   fileName: string;
   sha256: string;
@@ -45,6 +56,7 @@ export default function PdfImport(): JSX.Element {
   const { token } = useSession();
   const [file, setFile] = useState<File | null>(null);
   const [current, setCurrent] = useState<ImportJob | null>(null);
+  const [structuredDraft, setStructuredDraft] = useState('');
   const [jobs, setJobs] = useState<ImportJob[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -103,8 +115,69 @@ export default function PdfImport(): JSX.Element {
     try {
       const job = await api<ImportJob>(`/api/pdf-import/jobs/${encodeURIComponent(id)}`, token);
       setCurrent(job);
+      setStructuredDraft(job.structured ? JSON.stringify(job.structured, null, 2) : '');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not open import');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function extractStructured() {
+    if (!current) return;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const job = await api<ImportJob>(
+        `/api/pdf-import/${encodeURIComponent(current.id)}/extract`,
+        token,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
+      );
+      setCurrent(job);
+      setStructuredDraft(JSON.stringify(job.structured ?? {}, null, 2));
+      setNotice('Structured extraction completed. Review every field and validation warning before proceeding.');
+      await refreshJobs();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Structured extraction failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveStructuredDraft() {
+    if (!current) return;
+    let structured: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(structuredDraft);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('The JSON root must be an object.');
+      }
+      structured = parsed as Record<string, unknown>;
+    } catch (e) {
+      setError(e instanceof Error ? `Invalid JSON: ${e.message}` : 'Invalid JSON');
+      return;
+    }
+
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const job = await api<ImportJob>(
+        `/api/pdf-import/${encodeURIComponent(current.id)}/structure`,
+        token,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ structured }),
+        },
+      );
+      setCurrent(job);
+      setStructuredDraft(JSON.stringify(job.structured ?? {}, null, 2));
+      setNotice('Structured draft saved and revalidated. No production records were changed.');
+      await refreshJobs();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not save structured draft');
     } finally {
       setBusy(false);
     }
@@ -219,6 +292,53 @@ export default function PdfImport(): JSX.Element {
         {current.truncated && <p className="small muted">
           Preview is limited to the first 250,000 characters. The original extracted text was longer.
         </p>}
+
+        <h4>Structured records and validation</h4>
+        <p className="muted small">
+          {current.structured
+            ? `Extraction model: ${current.modelName ?? 'recorded'} · ${current.validation?.errors.length ?? 0} error(s) · ${current.validation?.warnings.length ?? 0} warning(s)`
+            : 'Extract the PDF text into editable record fields. If AI is not configured on the server, structured extraction will be unavailable.'}
+        </p>
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+          <button className="btn primary" type="button" onClick={() => void extractStructured()} disabled={busy || !current.text}>
+            {busy ? <Loader2 size={16} /> : <FileText size={16} />}
+            Extract structured data
+          </button>
+          {current.structured && <button className="btn" type="button" onClick={() => void saveStructuredDraft()} disabled={busy}>
+            <CheckCircle2 size={16} /> Save corrections and revalidate
+          </button>}
+        </div>
+
+        {current.validation && <>
+          {current.validation.errors.length > 0 && <div style={{ marginTop: 12 }}>
+            <b>Errors requiring correction</b>
+            <ul>{current.validation.errors.map((item, i) => <li key={`e-${i}`} className="small">{item}</li>)}</ul>
+          </div>}
+          {current.validation.warnings.length > 0 && <div style={{ marginTop: 12 }}>
+            <b>Warnings to review</b>
+            <ul>{current.validation.warnings.map((item, i) => <li key={`w-${i}`} className="small">{item}</li>)}</ul>
+          </div>}
+          <div className="row" style={{ gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+            {Object.entries(current.validation.counts).map(([key, count]) =>
+              <span className="pill gray" key={key}>{key}: {count}</span>
+            )}
+          </div>
+        </>}
+
+        {current.structured && <>
+          <label htmlFor="pdf-structured-json"><b>Editable structured JSON</b></label>
+          <textarea
+            id="pdf-structured-json"
+            className="input"
+            rows={16}
+            value={structuredDraft}
+            onChange={(e) => setStructuredDraft(e.target.value)}
+            style={{ width: '100%', resize: 'vertical', fontFamily: 'monospace', whiteSpace: 'pre' }}
+          />
+          <p className="muted small">
+            Save corrections to rerun deterministic validation. This only updates the review draft, not the production tables.
+          </p>
+        </>}
 
         <h4>Extracted text preview</h4>
         <textarea

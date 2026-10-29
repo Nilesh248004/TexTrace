@@ -35,6 +35,13 @@ export const config = {
       return !!this.apiKey;
     },
   },
+  gemini: {
+    apiKey: process.env.Gemini_API_KEY ?? '',
+    model: process.env.GEMINI_MODEL ?? 'gemini-3.8-flash',
+    get enabled(): boolean {
+      return !!this.apiKey;
+    },
+  },
   /** Demo "today" used for dashboards and default dates; seed data is generated relative to it. */
   defaultBusinessDate: '2026-10-28',
   /** Demo clock at seed time (15:10 IST on the business date). */
