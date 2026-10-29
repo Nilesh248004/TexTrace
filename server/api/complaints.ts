@@ -382,6 +382,7 @@ ${String(source.extracted_text).slice(0, 180000)}`;
       const modelsToTry = [...new Set([
         config.gemini.model,
         'gemini-3.6-flash',
+        'gemini-3.5-flash-lite',
       ])];
 
       for (const [index, model] of modelsToTry.entries()) {
