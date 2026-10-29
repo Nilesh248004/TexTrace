@@ -108,7 +108,7 @@ export function lotsRouter(c: ApiCtx): Router {
         const values: Judged[] = judgeTestValues(book, str(b.lot.count_id), t, mode(req));
         const worst = worstColor(values.map((j) => j.color));
         if (f.color && worst !== f.color) continue;
-        const row = { id: t.id, sampleId: t.sample_id, lotId: b.lot.id, lotNo: b.lot.lot_no, countId: b.lot.count_id, countDisplay: b.count.display, stage: t.stage, stageLabel: STAGE_INFO[str(t.stage) as Stage].label, machineId: t.machine_id, machineLabel: d.machineLabel(t.machine_id) ?? 'Lot composite', type: t.sample_type, pos: t.pos, testedAt: t.tested_at, shift: t.shift, by: d.userName(t.tested_by), instrument: t.instrument, values, worst, red: values.filter((j) => j.color === 'red').length, yellow: values.filter((j) => j.color === 'yellow').length, chain: chainOf('test_result', t) };
+        const row = { id: t.id, sampleId: t.sample_id, lotId: b.lot.id, lotNo: b.lot.lot_no, countId: b.lot.count_id, countDisplay: b.count.display, stage: t.stage, stageLabel: STAGE_INFO[str(t.stage) as Stage]?.label ?? str(t.stage), machineId: t.machine_id, machineLabel: d.machineLabel(t.machine_id) ?? 'Lot composite', type: t.sample_type, pos: t.pos, testedAt: t.tested_at, shift: t.shift, by: d.userName(t.tested_by), instrument: t.instrument, values, worst, red: values.filter((j) => j.color === 'red').length, yellow: values.filter((j) => j.color === 'yellow').length, chain: chainOf('test_result', t) };
         if (f.q && !`${row.sampleId} ${row.lotNo} ${row.machineLabel} ${row.by} ${row.stageLabel}`.toLowerCase().includes(f.q)) continue;
         out.push(row);
       }
