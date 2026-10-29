@@ -417,7 +417,7 @@ export class SimulatedLedger implements LedgerService {
   async listBlocks(offset: number, limit: number): Promise<{ items: LedgerBlock[]; total: number }> {
     const lim = clampInt(limit, 0, 1000, 25);
     const off = clampInt(offset, 0, Number.MAX_SAFE_INTEGER, 0);
-    const rows = await this.stmt(`SELECT * FROM ledger_blocks ORDER BY number DESC LIMIT ? OFFSET ?`).all<BlockRow>();
+    const rows = await this.stmt(`SELECT * FROM ledger_blocks ORDER BY number DESC LIMIT ? OFFSET ?`).all<BlockRow>(lim, off);
     const count = await this.stmt(`SELECT COUNT(*) AS n FROM ledger_blocks`).get<{ n: number | string }>();
     return { items: rows.map(blockOf), total: Number(count?.n ?? 0) };
   }

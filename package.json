@@ -2,7 +2,7 @@
   "name": "textrace",
   "version": "1.0.0",
   "private": true,
-  "description": "TexTrace - Blockchain-based Fibre-to-Yarn (Bale-to-Cone) traceability dashboard for a spinning mill",
+  "description": "TexTrace v2 - mill-to-customer traceability for a cotton spinning mill: masters, lot passports, complaint investigation with AI analysis, customer portal, permissioned ledger",
   "type": "module",
   "engines": {
     "node": ">=20"

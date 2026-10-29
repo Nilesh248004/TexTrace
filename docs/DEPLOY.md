@@ -19,13 +19,13 @@ The host's `PORT` is used automatically (`API_PORT` takes priority if set). Node
 | `DATABASE_URL` | yes | Neon connection string, pooled host, `?sslmode=verify-full`. Without it the app falls back to a local SQLite file. |
 | `LEDGER_VALIDATOR_SECRET` | yes | Private random value. Changing it later invalidates existing ledger signatures, so set it before real data is anchored. The server warns on boot if it is still the demo default. |
 | `MILL_NAME` | no | Name shown in the top bar. |
-| `ANTHROPIC_API_KEY` | no | Enables the AI narrative layer. |
+| `ANTHROPIC_API_KEY` | no | Enables the optional LLM narrative on top of the statistical complaint analysis (`AI_MODEL`, `AI_EFFORT`, `AI_FALLBACKS`, `AI_TIMEOUT_MS` tune it). Without a key the full statistical analysis still runs; nothing is invented. |
 
 Never commit `.env`; set variables in the host's dashboard.
 
 ## First start
 
-On first start the schema is applied and demo data is seeded automatically if the database is empty. From a laptop this takes about 90 seconds over the network to Neon; from a host in the same region it is much faster. Set the host's health-check grace period above that, or run `npm run seed` once beforehand. `npm run seed` wipes the target database.
+On first start the schema is applied and demo data (≈3,000 records, ≈2,400 ledger transactions in 114 blocks) is seeded automatically if the database is empty. The server opens its port immediately and answers `/api/*` with `503 {"seeding": true}` until seeding has finished — locally that takes about a second; against a remote Neon database it takes a few minutes the first time (the sign-in screen shows a "preparing" notice and retries by itself). You can also run `npm run seed` once beforehand. `npm run seed` wipes the target database; so does *Developer Console → Demo → Reset demo data*.
 
 ## Testing against Postgres
 

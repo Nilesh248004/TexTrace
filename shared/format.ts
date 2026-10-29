@@ -110,3 +110,57 @@ export function displayCount(countId: string): string {
   const m = /^(\d+)([A-Z]+)$/.exec(countId);
   return m ? `${m[1]} ${m[2]}` : countId;
 }
+
+// ---------------------------------------------------------------------------------------------
+// Mill-local (IST) formatting — the demo mill is in Tamil Nadu, so every timestamp is shown in Asia/Kolkata regardless of
+// the viewer's browser time zone.
+const IST = 'Asia/Kolkata';
+const istParts = (iso: string) => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const f = new Intl.DateTimeFormat('en-GB', { timeZone: IST, day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  const parts = Object.fromEntries(f.formatToParts(d).map((p) => [p.type, p.value]));
+  if (parts.month === 'Sept') parts.month = 'Sep';
+  return parts as Record<string, string>;
+};
+
+/** '28 Oct 2026, 14:35' in IST. */
+export function fmtDT(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const p = istParts(iso);
+  return p ? `${p.day} ${p.month} ${p.year}, ${p.hour}:${p.minute}` : iso;
+}
+/** '28 Oct 14:35' in IST (compact, no year). */
+export function fmtDTShort(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const p = istParts(iso);
+  return p ? `${p.day} ${p.month} ${p.hour}:${p.minute}` : iso;
+}
+/** '28 Oct 2026' in IST. */
+export function fmtD(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) iso = `${iso}T06:00:00+05:30`;
+  const p = istParts(iso);
+  return p ? `${p.day} ${p.month} ${p.year}` : iso;
+}
+/** '14:35' in IST. */
+export function fmtT(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const p = istParts(iso);
+  return p ? `${p.hour}:${p.minute}` : iso;
+}
+/** YYYY-MM-DD of an instant in IST. */
+export function istDate(iso: string): string {
+  return new Date(Date.parse(iso) + 330 * 60_000).toISOString().slice(0, 10);
+}
+/** '2 d 5 h' / '5 h 20 m' / '35 m' for a duration in ms. */
+export function fmtDuration(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined || !Number.isFinite(ms) || ms < 0) return '—';
+  const m = Math.round(ms / 60_000);
+  const d = Math.floor(m / 1440);
+  const h = Math.floor((m % 1440) / 60);
+  const mm = m % 60;
+  if (d > 0) return `${d} d ${h} h`;
+  if (h > 0) return `${h} h ${mm} m`;
+  return `${mm} m`;
+}

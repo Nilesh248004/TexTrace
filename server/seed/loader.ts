@@ -1,101 +1,206 @@
+// Loads the deterministic plan into the database and anchors every row on the simulated ledger:
+//   1. plain tables (users, counts, orders, settings, sequences, notifications)
+//   2. entity rows in dependency order (final state; version = 1 + history steps)
+//   3. one ledger block per production day; every version of every entity is a tx (masters bundle their items)
+//   4. anchor columns + entity_anchors back-filled, and one audit-log entry per tx so the Developer Console is populated
+import fs from 'node:fs';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { DB } from '../db';
 import type { LedgerService, PendingTx } from '../ledger/types';
+import type { DbChange, DevTrace, EntityRef, Role } from '@shared/types';
+import { config } from '../config';
 import { entityDef, recordHashOf, snapshotOf } from '../db/entities';
+import { extractRefs } from '../lib/refs';
+import { invalidateMasters } from '../domain/masters';
+import { initClock } from '../lib/clock';
+import { istDate } from '@shared/format';
+import { generatePlan, type Plan, type SeedRow } from './generate';
+import { runEngine } from '../analysis/engine';
+import { narrate } from '../analysis/narrative';
+import { hashObject } from '../lib/hash';
 
-const USERS = [
-  ['U-ADMIN', 'admin', 'R. Senthil Kumar', 'ADMIN', 'MillOrg', 'Mill Admin', null],
-  ['U-DEV', 'dev', 'A. Karthik', 'DEVELOPER', 'MillOrg', 'Blockchain Developer', null],
-  ['U-OPERATOR', 'operator', 'M. Ravi', 'PRODUCTION', 'MillOrg', 'Spinning Supervisor', null],
-  ['U-QA', 'qa', 'S. Priya', 'QA', 'QualityOrg', 'QA Engineer', null],
-  ['U-DISPATCH', 'dispatch', 'K. Murugan', 'DISPATCH', 'MillOrg', 'Dispatch & Packing In-charge', null],
-  ['U-CS', 'cs', 'J. Anitha', 'CUSTOMER_SERVICE', 'MillOrg', 'Customer Service Executive', null],
-  ['U-AUDITOR', 'auditor', 'V. Ramesh', 'AUDITOR', 'AuditOrg', 'Internal Auditor', null],
-  ['U-BUYER', 'buyer', 'PD Textiles - Purchase', 'BUYER', 'BuyerOrg', 'Buyer', 'CUST-PDT'],
-] as const;
+const ORDER = ['customer', 'machine', 'bale', 'mix', 'mix_bale', 'lot', 'master_version', 'master_item', 'lens', 'accessory_change', 'stage_run', 'test_result', 'packing', 'qa_override', 'dispatch', 'dispatch_lot', 'passport', 'document', 'complaint', 'complaint_event', 'analysis', 'conclusion'];
 
-export async function seedDatabase(db: DB, ledger: LedgerService, profile: 'full' | 'pre-demo' = 'full'): Promise<void> {
-  const txs: PendingTx[] = [];
-  const insertEntity = async (type: string, row: Record<string, unknown>, contract: PendingTx['contract'], fn: string) => {
-    const def = entityDef(type);
-    const columns = Object.keys(row);
-    await db.prepare(`INSERT INTO ${def.table} (${columns.join(',')}) VALUES (${columns.map(() => '?').join(',')})`).run(...columns.map((key) => row[key]));
-    const stored = await db.prepare(`SELECT * FROM ${def.table} WHERE ${def.idColumn}=?`).get(row[def.idColumn]) as Record<string, unknown>;
-    const ref = { type, id: String(stored[def.idColumn]), version: Number(stored.version), recordHash: recordHashOf(type, stored), snapshot: snapshotOf(type, stored) };
-    txs.push({ contract, fn, payload: { id: ref.id, seeded: true }, actorId: 'system', actorRole: 'SYSTEM', status: 'VALID', reason: null, entityRefs: [ref] });
+interface Tx {
+  at: number; seq: number; actor: string; contract: string; fn: string; label: string; method: string; path: string;
+  refs: EntityRef[]; changes: DbChange[]; payload: Record<string, unknown>;
+}
+
+function payloadOf(type: string, row: Record<string, unknown>, steps: string[]): Record<string, unknown> {
+  const pick = (...keys: string[]) => Object.fromEntries(keys.filter((k) => row[k] !== undefined && row[k] !== null).map((k) => [k, row[k]]));
+  const base: Record<string, unknown> = { entity: type, id: row[entityDef(type).idColumn] };
+  switch (type) {
+    case 'stage_run': return { ...base, ...pick('lot_id', 'stage', 'machine_id', 'in_at', 'out_at', 'input_kg', 'output_kg', 'waste_kg', 'batch_ref') };
+    case 'test_result': return { ...base, ...pick('sample_id', 'lot_id', 'stage', 'machine_id', 'sample_type', 'tested_at'), values: JSON.parse(String(row.values_json)) };
+    case 'accessory_change': return { ...base, ...pick('machine_id', 'kind', 'spec', 'changed_at') };
+    case 'bale': return { ...base, ...pick('bale_no', 'variety', 'bay', 'bin', 'status', 'mix_id'), step: steps[0] };
+    case 'mix': return { ...base, ...pick('mix_no', 'count_id', 'status', 'total_kg') };
+    case 'lot': return { ...base, ...pick('lot_no', 'count_id', 'mix_id', 'status') };
+    case 'packing': return { ...base, ...pick('lot_id', 'cartons', 'net_kg', 'color_actual', 'color_master', 'color_ok') };
+    case 'dispatch': return { ...base, ...pick('dispatch_no', 'customer_id', 'quantity_kg', 'vehicle_no', 'invoice_no', 'status') };
+    case 'complaint': return { ...base, ...pick('complaint_no', 'type', 'customer_id', 'lot_id', 'status') };
+    case 'master_version': return { ...base, ...pick('master_type', 'count_id', 'version_no', 'status', 'effective_from') };
+    default: return base;
+  }
+}
+
+const CHECKS: Record<string, string[]> = {
+  'AssetID.registerBale': ['bale-no-unique', 'hvi-present', 'bay-bin-present'],
+  'AssetID.registerMix': ['bales-in-store', 'recipe-within-master-band', 'count-master-active'],
+  'AssetID.registerLot': ['mix-exists', 'count-matches-mix', 'lot-no-unique'],
+  'ProcessEvent.issueBales': ['bales-reserved-for-mix', 'bales-in-store'],
+  'ProcessEvent.logStageRun': ['lot-exists', 'stage-order', 'machine-in-department', 'mass-balance', 'time-window'],
+  'ProcessEvent.recordAccessoryChange': ['machine-exists', 'kind-valid-for-department'],
+  'ProcessEvent.recordPacking': ['lot-exists', 'ring-and-winding-complete', 'color-code-verified'],
+  'Quality.recordTestResult': ['lot-exists', 'stage-started', 'values-keys', 'values-sane', 'judged-against-active-master'],
+  'Quality.releaseLot': ['lot-composite-tested', 'no-open-red'],
+  'Quality.recordOverride': ['reason-required', 'qa-role'],
+  'Quality.registerComplaint': ['customer-exists', 'lot-dispatched-to-customer', 'type-valid'],
+  'Quality.transitionComplaint': ['complaint-exists', 'transition-allowed'],
+  'Quality.recordConclusion': ['fields-required', 'status-under-analysis'],
+  'Quality.upsertLens': ['type-valid', 'weights-valid'],
+  'Master.createVersion': ['count-exists', 'previous-version-exists'],
+  'Master.approve': ['status-draft', 'qa-role', 'completeness-checked'],
+  'Master.activate': ['status-approved', 'supersede-active-version'],
+  'Transfer.createDispatch': ['customer-exists', 'mass-balance-custody', 'qa-release', 'quality-gate', 'vehicle-format'],
+  'Transfer.markDelivered': ['dispatch-exists', 'delivery-after-dispatch'],
+  'AssetID.issuePassport': ['dispatch-exists', 'not-issued'],
+  'AssetID.anchorDocument': ['sha256-recorded'],
+  'AssetID.registerCustomer': ['name-required'], 'AssetID.registerMachine': ['department-valid'],
+};
+
+export async function seedDatabase(db: DB, ledger: LedgerService, _profile: 'full' | 'pre-demo' = 'full', plan: Plan = generatePlan()): Promise<Plan> {
+  const userById = new Map(plan.users.map((u) => [String(u.id), u]));
+  // ---- build final states + txs
+  const txs: Tx[] = [];
+  const bundleTx = new Map<string, Tx>();
+  const finals: { type: string; row: Record<string, unknown> }[] = [];
+  let seq = 0;
+  const lastRef = new Map<string, { tx: Tx; ref: EntityRef }>();
+  const allRefs: { tx: Tx; ref: EntityRef }[] = [];
+  const mk = (type: string, state: Record<string, unknown>, version: number): EntityRef => {
+    const row: Record<string, unknown> = { ...state, version };
+    return { type, id: String(row[entityDef(type).idColumn]), version, recordHash: recordHashOf(type, row), snapshot: snapshotOf(type, row) };
   };
-  const plain = (sql: string, ...params: unknown[]) => db.prepare(sql).run(...params);
-
-  const seed = db.transaction(async () => {
-    for (const user of USERS) await plain('INSERT INTO users(id,username,name,role,org,title,customer_id) VALUES(?,?,?,?,?,?,?)', ...user);
-    for (const count of [['30CH', '30s Carded Hosiery', '30 CH', 30], ['40CH', '40s Carded Hosiery', '40 CH', 40], ['20CH', '20s Carded Hosiery', '20 CH', 20]]) await plain('INSERT INTO counts(id,label,display,ne) VALUES(?,?,?,?)', ...count);
-    for (const c of [
-      { id: 'CUST-PDT', code: 'PDT', name: 'PD Textiles', city: 'Tiruppur', contact_name: 'D. Prakash', email: 'qa@pdtextiles.example' },
-      { id: 'CUST-VKF', code: 'VKF', name: 'Velan Knit Fabrics', city: 'Tiruppur', contact_name: 'S. Velan', email: 'quality@velanknit.example' },
-      { id: 'CUST-SLH', code: 'SLH', name: 'Sri Lakshmi Hosiery', city: 'Coimbatore', contact_name: 'L. Lakshmi', email: 'lab@srihosiery.example' },
-      { id: 'CUST-KVW', code: 'KVW', name: 'Kaveri Weaves', city: 'Erode', contact_name: 'K. Murali', email: 'qa@kaveriweaves.example' },
-    ]) await insertEntity('customer', { ...c, created_at: '2026-09-01T08:00:00.000Z' }, 'AssetID', 'registerCustomer');
-
-    for (const [department, machineNo, line] of [['RF', 3, 'A'], ['RF', 5, 'B'], ['AW', 1, 'A'], ['FF', 1, 'A'], ['CARD', 1, 'A']] as const) {
-      const id = `${department}-${machineNo}`;
-      await insertEntity('machine', { id, department, machine_no: machineNo, label: `${department} M/c ${machineNo}`, line, make: 'LMW', model: 'Demo series', created_at: '2026-09-01T08:00:00.000Z' }, 'AssetID', 'registerMachine');
+  const addRows = (rows: SeedRow[]): { type: string; row: Record<string, unknown> }[] => {
+  const added: { type: string; row: Record<string, unknown> }[] = [];
+  for (const sr of rows) {
+    let state: Record<string, unknown> = { ...sr.row };
+    const def = entityDef(sr.type);
+    const id = String(state[def.idColumn]);
+    // v1
+    const ref1 = mk(sr.type, state, 1);
+    const change1: DbChange = { table: def.table, op: 'insert', key: id, before: null, after: { ...state, version: 1 } };
+    let tx: Tx | undefined = sr.bundle ? bundleTx.get(sr.bundle) : undefined;
+    if (!tx) {
+      tx = { at: Date.parse(sr.at), seq: seq++, actor: sr.actor, contract: sr.contract, fn: sr.fn, label: sr.label, method: sr.method ?? 'POST', path: sr.path ?? '/api/' + sr.type, refs: [], changes: [], payload: sr.payload ?? payloadOf(sr.type, state, [sr.fn]) };
+      txs.push(tx);
+      if (sr.bundle) bundleTx.set(sr.bundle, tx);
+    } else if (sr.bundle) {
+      tx.payload = { ...tx.payload, items: ((tx.payload.items as number) ?? 0) + 1 };
     }
-
-    const standardRows = [
-      ['RM','MIC','FIBRE',4.2,3.8,4.6,'µg/in'], ['RM','UHML','FIBRE',28.8,28,29.6,'mm'], ['RF','U','QUALITY',10.5,10.3,10.8,'%'],
-      ['RF','CV','QUALITY',13.3,13,13.7,'%'], ['RF','THIN','QUALITY',2,null,5,'/km'], ['RF','THICK','QUALITY',60,null,90,'/km'],
-      ['RF','NEPS','QUALITY',90,null,130,'/km'], ['RF','IPI','QUALITY',152,null,220,'/km'], ['RF','H','QUALITY',5.8,5.4,6.3,''],
-      ['RF','BREAK_DRAFT','PROCESS',1.18,1.14,1.24,''], ['AW','U','QUALITY',10.7,10.4,11,'%'], ['FF','U','QUALITY',4.5,4.1,4.9,'%'],
-    ] as const;
-    for (const [department, parameter, category, std, lower, upper, unit] of standardRows) {
-      const id = `STD-30CH-${department}-${parameter}`;
-      await insertEntity('standard', { id, count_id: '30CH', department, parameter, category, std, lower_limit: lower, upper_limit: upper, unit, active: 1, updated_by: 'U-QA', updated_at: '2026-09-01T08:00:00.000Z' }, 'Quality', 'upsertStandard');
+    tx.refs.push(ref1); tx.changes.push(change1);
+    allRefs.push({ tx, ref: ref1 }); lastRef.set(`${sr.type}|${id}`, { tx, ref: ref1 });
+    let version = 1;
+    for (const step of sr.history ?? []) {
+      const before = { ...state, version };
+      state = { ...state, ...step.patch };
+      version += 1;
+      const ref = mk(sr.type, state, version);
+      const stx: Tx = { at: Date.parse(step.at), seq: seq++, actor: step.actor, contract: step.contract, fn: step.fn, label: step.label, method: 'POST', path: '/api/' + sr.type, refs: [ref], changes: [{ table: def.table, op: 'update', key: id, before, after: { ...state, version } }], payload: step.payload ?? { ...payloadOf(sr.type, state, [step.fn]), patch: step.patch } };
+      txs.push(stx); allRefs.push({ tx: stx, ref }); lastRef.set(`${sr.type}|${id}`, { tx: stx, ref });
     }
+    finals.push({ type: sr.type, row: { ...state, version } });
+    added.push({ type: sr.type, row: { ...state, version } });
+  }
+  return added;
+  };
+  addRows(plan.rows);
 
-    await insertEntity('bale', { id: 'BALE-0412', bale_no: 'B26-0412', supplier: 'Saurashtra Ginning Co.', station: 'Rajkot', variety: 'Shankar-6', gin_lot: 'GJ-26-19', weight_kg: 172, remaining_kg: 0, arrival_date: '2026-09-25', fibre: JSON.stringify({ MIC: 4.2, UHML: 28.9, UI: 82.1, STR: 29.7, SFI: 8.4, TRASH: 2.4, MOIST: 7.4 }), created_at: '2026-09-25T08:00:00.000Z' }, 'AssetID', 'registerBale');
+  // ---- 1. plain tables + entity rows
+  const run = (sql: string, ...params: unknown[]) => db.prepare(sql).run(...params);
+  const insert = async (table: string, row: Record<string, unknown>) => {
+    const cols = Object.keys(row);
+    await run(`INSERT INTO ${table} (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`, ...cols.map((k) => row[k]));
+  };
+  await db.transaction(async () => {
+    for (const u of plan.users) await insert('users', u);
+    for (const c of plan.counts) await insert('counts', c);
+    for (const t of ORDER) for (const f of finals.filter((x) => x.type === t)) if (t === 'customer') await insert(entityDef(t).table, f.row);
+    for (const o of plan.orders) await insert('orders', o);
+    for (const t of ORDER) if (t !== 'customer') for (const f of finals) if (f.type === t) await insert(entityDef(t).table, f.row);
+    for (const [key, value] of Object.entries(plan.settings)) await run('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', key, JSON.stringify(value));
+    for (const [name, value] of Object.entries(plan.sequences)) await run('INSERT INTO sequences(name,value) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET value=excluded.value', name, value);
+    for (const n of plan.notifications) await run('INSERT INTO notifications(id,severity,title,body,link,created_at,read) VALUES(?,?,?,?,?,?,0)', n.id, n.severity, n.title, n.body, n.link, n.created_at);
+  })();
+  // AI analyses for complaints that are in progress (run through the same engine the product uses)
+  invalidateMasters();
+  const extra: SeedRow[] = [];
+  for (const sr of plan.rows.filter((x) => x.type === 'complaint' && (x.history ?? []).some((h) => h.patch.status === 'UNDER_ANALYSIS') && !(x.history ?? []).some((h) => h.patch.status === 'RESOLVED'))) {
+    const step = (sr.history ?? []).find((h) => h.patch.status === 'UNDER_ANALYSIS') as NonNullable<SeedRow['history']>[number];
+    const at = new Date(Date.parse(step.at) - 5 * 60_000).toISOString();
+    const base = await runEngine(db, { lotKey: String(sr.row.lot_id), complaintId: String(sr.row.id) }, at);
+    if (!base) continue;
+    const { result, llm } = await narrate(base);
+    const id = `AN-0001-${result.lot.lotNo}`;
+    const inputHash = hashObject({ lot: result.lot.id, complaint: sr.row.id, mode: result.mode, lens: result.lens, reference: result.referenceLots.map((r) => r.lotId), observations: result.parameters.map((p) => [p.stage, p.key, p.machineId, p.value, p.color]) });
+    extra.push({ type: 'analysis', row: { id, complaint_id: sr.row.id, lot_id: sr.row.lot_id, run_no: 1, context: JSON.stringify({ mode: 'asOf', focus: null }), comparison_lot_ids: JSON.stringify(result.referenceLots.map((r) => r.lotId)), result: JSON.stringify(result), input_hash: inputHash, output_hash: hashObject(result), llm: JSON.stringify(llm), created_by: 'U-QA', created_at: at }, at, actor: 'U-QA', contract: 'Quality', fn: 'anchorAnalysis', label: `AI analysis ${id} for complaint ${String(sr.row.complaint_no)}`, method: 'POST', path: '/api/analysis/run', payload: { analysisId: id, complaintId: sr.row.id, lotId: sr.row.lot_id, runNo: 1, inputHash, outputHash: hashObject(result), engineVersion: result.engineVersion } });
+  }
+  if (extra.length) await db.transaction(async () => { for (const f of addRows(extra)) await insert(entityDef(f.type).table, f.row); })();
+  for (const f of plan.files) {
+    const full = path.join(config.uploadsDir, f.path);
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.writeFileSync(full, f.content);
+  }
 
-    const lots = [
-      { id: 'LOT-182-2026', lot_no: '182/2026', lot_code: '30CH 182 X/26 001', seq: 182, status: 'DISPATCHED', start_date: '2026-09-29' },
-      { id: 'LOT-183-2026', lot_no: '183/2026', lot_code: '30CH 183 X/26 001', seq: 183, status: 'PACKED', start_date: '2026-10-01' },
-      { id: 'LOT-185-2026', lot_no: '185/2026', lot_code: '30CH 185 X/26 001', seq: 185, status: 'ON_HOLD', start_date: '2026-10-05' },
-    ];
-    for (const l of lots) await insertEntity('lot', { ...l, year: 2026, count_id: '30CH', line: l.seq % 2 === 0 ? 'A' : 'B', planned_kg: 4500, end_date: null, created_at: `${l.start_date}T06:00:00.000Z` }, 'AssetID', 'registerLot');
-    await insertEntity('lot_bale', { id: 'LB-182-BALE-0412', lot_id: 'LOT-182-2026', bale_id: 'BALE-0412', kg_used: 172 }, 'AssetID', 'registerLot');
+  // ---- 2. ledger: one block per IST day
+  txs.sort((a, b) => a.at - b.at || a.seq - b.seq);
+  const byDay = new Map<string, Tx[]>();
+  for (const t of txs) { const d = istDate(new Date(t.at).toISOString()); if (!byDay.has(d)) byDay.set(d, []); byDay.get(d)!.push(t); }
+  const committed = new Map<Tx, { txHash: string; block: number }>();
+  const auditRows: Record<string, unknown>[] = [];
+  for (const day of [...byDay.keys()].sort()) {
+    const group = byDay.get(day)!;
+    const pending: PendingTx[] = group.map((t) => ({
+      contract: t.contract as PendingTx['contract'], fn: t.fn, payload: t.payload, actorId: t.actor, actorRole: (userById.get(t.actor)?.role ?? 'SYSTEM') as Role | 'SYSTEM', status: 'VALID', reason: null, entityRefs: t.refs,
+    }));
+    const commit = await ledger.commit(pending, { timestamp: new Date(group[group.length - 1].at).toISOString() });
+    commit.txs.forEach((ct, i) => {
+      const t = group[i];
+      committed.set(t, { txHash: ct.txHash, block: commit.block.number });
+      const user = userById.get(t.actor);
+      const trace: DevTrace = {
+        actionId: randomUUID(), action: `${t.contract.toLowerCase()}.${t.fn}`, label: t.label, timestamp: ct.timestamp,
+        user: user ? { id: String(user.id), username: String(user.username), name: String(user.name), role: user.role as Role } : null,
+        request: { method: t.method, path: t.path, query: {}, body: t.payload }, response: { status: 200, body: { ok: true, entities: t.refs.map((r) => `${r.type}:${r.id}@v${r.version}`).slice(0, 12), count: t.refs.length } },
+        invocations: [{ contract: t.contract as never, fn: t.fn, payload: t.payload, accepted: true, reason: null, checks: (CHECKS[`${t.contract}.${t.fn}`] ?? ['actor-permitted']).map((rule) => ({ rule, passed: true, detail: 'ok' })), txHash: ct.txHash, blockNumber: commit.block.number }],
+        accepted: true, reason: null, txHashes: [ct.txHash], blockNumber: commit.block.number, validatorApprovals: commit.block.approvals,
+        dbDiff: t.changes.length > 25 ? [...t.changes.slice(0, 25), { table: t.changes[0].table, op: 'insert', key: `…and ${t.changes.length - 25} more rows`, before: null, after: null }] : t.changes,
+        durationMs: 18 + (i * 7) % 41, extra: null,
+      };
+      auditRows.push({
+        action_id: trace.actionId, timestamp: trace.timestamp, user_id: user ? user.id : null, username: user ? user.username : null, role: user ? user.role : null, action: trace.action, label: t.label,
+        method: t.method, path: t.path, accepted: 1, reason: null, contracts: JSON.stringify([`${t.contract}.${t.fn}`]), tx_hashes: JSON.stringify([ct.txHash]), block_number: commit.block.number,
+        refs: extractRefs(t.label, t.refs.map((r) => r.snapshot)), trace: JSON.stringify(trace),
+      });
+    });
+  }
 
-    await insertEntity('production_event', { id: 'PE-000182', lot_id: 'LOT-182-2026', department: 'RF', machine_id: 'RF-3', event_date: '2026-10-01', day_index: 2, shift: 'B', input_kg: 1000, output_kg: 960, waste_kg: 40, params: JSON.stringify({ BREAK_DRAFT: 1.34, TOP_ARM_KG: 13.6, SPINDLE_RPM: 17500 }), notes: 'Preventive maintenance: top roller cots changed; break-draft change gear replaced', operator_id: 'U-OPERATOR', created_at: '2026-10-01T13:00:00.000Z' }, 'ProcessEvent', 'logStageEvent');
-    for (const [id, date, shift, values, machine] of [
-      ['TR-000182','2026-10-01','A',{ U: 12.48, CV: 15.7, THIN: 9, THICK: 118, NEPS: 96, IPI: 223 },'RF-3'],
-      ['TR-000183','2026-10-01','B',{ U: 12.71, CV: 16.1, THIN: 11, THICK: 126, NEPS: 101, IPI: 238 },'RF-3'],
-      ['TR-000184','2026-10-01','C',{ U: 12.63, CV: 15.9, THIN: 10, THICK: 121, NEPS: 98, IPI: 229 },'RF-3'],
-      ['TR-000185','2026-10-03',null,{ U: 10.74, CV: 13.62, THIN: 4.6, THICK: 72, NEPS: 96, IPI: 172, H: 5.8 },null],
-      ['TR-000186','2026-10-08',null,{ U: 10.51, CV: 13.4, COUNT_CV: 2.31 },null],
-      ['TR-000187','2026-10-15','A',{ H: 6.45 },'RF-5'],
-      ['TR-000188','2026-10-15','A',{ U: 4.95 },'FF-1'],
-    ] as const) {
-      const lotId = id === 'TR-000186' ? 'LOT-185-2026' : id === 'TR-000188' ? 'LOT-183-2026' : 'LOT-182-2026';
-      await insertEntity('test_result', { id, lot_id: lotId, department: 'RF', machine_id: machine, sample_type: machine ? 'MACHINE' : 'LOT', test_date: date, day_index: machine ? 2 : null, shift, values_json: JSON.stringify(values), instrument: 'Uster Tester 6', tested_by: 'U-QA', remarks: '', created_at: `${date}T15:00:00.000Z` }, 'Quality', 'recordTestResult');
+  // ---- 3. anchors + audit
+  await db.transaction(async () => {
+    for (const { tx, ref } of allRefs) {
+      const c = committed.get(tx) as { txHash: string; block: number };
+      await run('INSERT INTO entity_anchors(entity_type,entity_id,version,record_hash,tx_hash,block_number,created_at) VALUES(?,?,?,?,?,?,?)', ref.type, ref.id, ref.version, ref.recordHash, c.txHash, c.block, new Date(tx.at).toISOString());
     }
-
-    await insertEntity('packing', { id: 'PK-000182', lot_id: 'LOT-182-2026', pack_date: '2026-10-08', pack_weight_kg: 50, packs_count: 88, cones_per_pack: 30, total_kg: 4400, pack_from: 'P182-0001', pack_to: 'P182-0088', created_by: 'U-DISPATCH', created_at: '2026-10-08T16:00:00.000Z' }, 'ProcessEvent', 'recordPacking');
-    if (profile === 'full') {
-      const gate = JSON.stringify({ passed: true, overridden: false, checkedAt: '2026-10-09T08:00:00.000Z', lots: [], message: 'Quality gate passed; machine-level warnings noted.' });
-      await insertEntity('dispatch', { id: 'DSP-2026-0109', dispatch_no: 'DSP/2026/0109', customer_id: 'CUST-PDT', count_id: '30CH', quantity_kg: 2000, dispatch_date: '2026-10-09', pack_weight_kg: 50, packs_count: 40, cones_count: 1200, vehicle_no: 'TN 39 AB 4521', lr_no: 'LR/26/7781', invoice_no: 'INV/26/1982', gate, override_ids: '[]', passport_code: 'PP-182DEMO', status: 'DISPATCHED', created_by: 'U-DISPATCH', created_at: '2026-10-09T08:00:00.000Z' }, 'Transfer', 'createDispatch');
-      await insertEntity('dispatch_lot', { id: 'DL-DSP-2026-0109-LOT-182-2026', dispatch_id: 'DSP-2026-0109', lot_id: 'LOT-182-2026', quantity_kg: 2000 }, 'Transfer', 'createDispatch');
-      await insertEntity('passport', { code: 'PP-182DEMO', dispatch_id: 'DSP-2026-0109', issued_at: '2026-10-09T08:00:00.000Z' }, 'AssetID', 'issuePassport');
-      await insertEntity('complaint', { id: 'CMP-22-2026', complaint_no: '22/2026', seq: 22, year: 2026, complainant_name: 'Mr. D. Prakash (QA Manager, PD Textiles)', type: 'EVENNESS', customer_id: 'CUST-PDT', lot_id: 'LOT-182-2026', dispatch_id: 'DSP-2026-0109', description: 'Barré / streaks observed in single jersey fabric knitted from cones of lot 30CH 182 X/26 001. Approx. 6 rolls affected. Request investigation and credit.', document_id: null, status: 'OPEN', received_date: '2026-10-14', created_by: 'U-CS', created_at: '2026-10-14T09:00:00.000Z', updated_at: '2026-10-14T09:00:00.000Z' }, 'Quality', 'registerComplaint');
-      await insertEntity('complaint_event', { id: 'CE-000022', complaint_id: 'CMP-22-2026', from_status: null, to_status: 'OPEN', note: 'Complaint registered on ledger', by_user_id: 'U-CS', at: '2026-10-14T09:00:00.000Z' }, 'Quality', 'registerComplaint');
+    for (const { tx, ref } of lastRef.values()) {
+      const c = committed.get(tx) as { txHash: string; block: number };
+      const def = entityDef(ref.type);
+      await run(`UPDATE ${def.table} SET tx_hash=?, block_number=?, record_hash=? WHERE ${def.idColumn}=?`, c.txHash, c.block, ref.recordHash, ref.id);
     }
-    for (const [key, value] of Object.entries({ millName: 'Model Spinning Mill - Unit 1', lotNoFormat: '{seq}/{year}', lotCodeFormat: '{count} {seq} {mark}/{yearShort} {batch}', lotMark: 'X', warnFraction: 0.2, businessDate: '2026-10-16', qualityColumns: ['U','CV','THIN','THICK','NEPS','IPI','H'] })) await plain('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', key, JSON.stringify(value));
-    for (const [name, value] of [['complaint:2026', profile === 'full' ? 22 : 21], ['lot:2026', 185], ['dispatch:2026', profile === 'full' ? 109 : 108], ['id:CE', profile === 'full' ? 22 : 21], ['id:TR', 188], ['id:PE', 182], ['id:PK', 182], ['id:CON', 0]] as const) {
-      await plain('INSERT INTO sequences(name,value) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET value=excluded.value', name, value);
-    }
-    if (txs.length) {
-      const commit = await ledger.commit(txs, { timestamp: '2026-10-16T08:00:00.000Z' });
-      for (const tx of commit.txs) for (const ref of tx.entityRefs) {
-        const def = entityDef(ref.type);
-        await db.prepare(`UPDATE ${def.table} SET tx_hash=?,block_number=?,record_hash=? WHERE ${def.idColumn}=?`).run(tx.txHash, commit.block.number, ref.recordHash, ref.id);
-        await db.prepare('INSERT INTO entity_anchors(entity_type,entity_id,version,record_hash,tx_hash,block_number,created_at) VALUES(?,?,?,?,?,?,?)').run(ref.type, ref.id, ref.version, ref.recordHash, tx.txHash, commit.block.number, commit.block.timestamp);
-      }
-    }
-  });
-  await seed();
+    for (const a of auditRows) await insert('audit_log', a);
+  })();
+  invalidateMasters();
+  await initClock(db);
+  return plan;
 }

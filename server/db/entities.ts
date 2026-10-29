@@ -22,55 +22,71 @@ export const ANCHOR_COLUMNS = ['tx_hash', 'block_number', 'record_hash', 'versio
 const def = (d: Omit<EntityDef, 'jsonFields'> & { jsonFields?: string[] }): EntityDef => ({ jsonFields: [], ...d });
 
 export const ENTITIES: Record<string, EntityDef> = {
-  customer: def({ type: 'customer', table: 'customers', idColumn: 'id', fields: ['id', 'code', 'name', 'city', 'contact_name', 'email', 'created_at'], domains: ['customers'] }),
-  machine: def({ type: 'machine', table: 'machines', idColumn: 'id', fields: ['id', 'department', 'machine_no', 'label', 'line', 'make', 'model', 'created_at'], domains: ['lots'] }),
+  customer: def({ type: 'customer', table: 'customers', idColumn: 'id', fields: ['id', 'code', 'name', 'city', 'contact_name', 'email', 'phone', 'address', 'created_at'], domains: ['customers'] }),
+  machine: def({ type: 'machine', table: 'machines', idColumn: 'id', fields: ['id', 'department', 'machine_no', 'label', 'line', 'make', 'model', 'spindles', 'created_at'], domains: ['lots', 'production'] }),
   bale: def({
     type: 'bale', table: 'bales', idColumn: 'id',
-    fields: ['id', 'bale_no', 'supplier', 'station', 'variety', 'gin_lot', 'weight_kg', 'remaining_kg', 'arrival_date', 'fibre', 'created_at'],
+    fields: ['id', 'bale_no', 'supplier', 'station', 'variety', 'gin_lot', 'weight_kg', 'remaining_kg', 'received_at', 'bay', 'bin', 'status', 'issued_at', 'mix_id', 'fibre', 'created_at'],
     jsonFields: ['fibre'], domains: ['bales', 'lots'],
   }),
+  mix: def({
+    type: 'mix', table: 'mixes', idColumn: 'id',
+    fields: ['id', 'mix_no', 'count_id', 'status', 'planned_at', 'issued_at', 'total_kg', 'recipe', 'fibre', 'master_version_id', 'blow_room_line', 'created_by', 'created_at'],
+    jsonFields: ['recipe', 'fibre'], domains: ['bales', 'lots'],
+  }),
+  mix_bale: def({ type: 'mix_bale', table: 'mix_bales', idColumn: 'id', fields: ['id', 'mix_id', 'bale_id', 'kg_used', 'pct'], domains: ['bales', 'lots'] }),
   lot: def({
     type: 'lot', table: 'lots', idColumn: 'id',
-    fields: ['id', 'lot_no', 'lot_code', 'seq', 'year', 'count_id', 'line', 'status', 'planned_kg', 'start_date', 'end_date', 'created_at'],
+    fields: ['id', 'lot_no', 'lot_code', 'seq', 'year', 'count_id', 'mix_id', 'line', 'status', 'planned_kg', 'start_date', 'end_date', 'qa_release_at', 'qa_release_by', 'created_at'],
     domains: ['lots', 'dashboard'],
   }),
-  lot_bale: def({ type: 'lot_bale', table: 'lot_bales', idColumn: 'id', fields: ['id', 'lot_id', 'bale_id', 'kg_used'], domains: ['lots', 'bales'] }),
-  production_event: def({
-    type: 'production_event', table: 'production_events', idColumn: 'id',
-    fields: ['id', 'lot_id', 'department', 'machine_id', 'event_date', 'day_index', 'shift', 'input_kg', 'output_kg', 'waste_kg', 'params', 'notes', 'operator_id', 'created_at'],
-    jsonFields: ['params'], domains: ['lots', 'dashboard'],
+  stage_run: def({
+    type: 'stage_run', table: 'stage_runs', idColumn: 'id',
+    fields: ['id', 'lot_id', 'stage', 'machine_id', 'location', 'shift', 'operator_id', 'in_at', 'out_at', 'input_kg', 'output_kg', 'waste_kg', 'waste_type', 'batch_ref', 'input_refs', 'params', 'accessories', 'notes', 'created_at'],
+    jsonFields: ['input_refs', 'params', 'accessories'], domains: ['lots', 'production', 'dashboard'],
   }),
   test_result: def({
     type: 'test_result', table: 'test_results', idColumn: 'id',
-    fields: ['id', 'lot_id', 'department', 'machine_id', 'sample_type', 'test_date', 'day_index', 'shift', 'values_json', 'instrument', 'tested_by', 'remarks', 'created_at'],
-    jsonFields: ['values_json'], domains: ['lots', 'dashboard'],
+    fields: ['id', 'sample_id', 'lot_id', 'stage', 'machine_id', 'sample_type', 'pos', 'test_date', 'tested_at', 'shift', 'values_json', 'instrument', 'tested_by', 'remarks', 'created_at'],
+    jsonFields: ['values_json'], domains: ['lots', 'quality', 'dashboard'],
   }),
-  standard: def({
-    type: 'standard', table: 'standards', idColumn: 'id',
-    fields: ['id', 'count_id', 'department', 'parameter', 'category', 'std', 'lower_limit', 'upper_limit', 'unit', 'active', 'updated_by', 'updated_at'],
-    domains: ['standards', 'lots', 'dashboard'],
+  master_version: def({
+    type: 'master_version', table: 'master_versions', idColumn: 'id',
+    fields: ['id', 'master_type', 'count_id', 'version_no', 'status', 'effective_from', 'effective_to', 'meta', 'note', 'created_by', 'created_at', 'approved_by', 'approved_at', 'activated_by', 'activated_at'],
+    jsonFields: ['meta'], domains: ['masters', 'lots', 'dashboard'],
+  }),
+  master_item: def({
+    type: 'master_item', table: 'master_items', idColumn: 'id',
+    fields: ['id', 'version_id', 'master_type', 'count_id', 'scope', 'parameter', 'std', 'lower_limit', 'upper_limit', 'unit', 'frequency', 'instrument', 'note'],
+    domains: ['masters'],
+  }),
+  lens: def({ type: 'lens', table: 'complaint_lens', idColumn: 'id', fields: ['id', 'complaint_type', 'items', 'updated_by', 'updated_at'], jsonFields: ['items'], domains: ['masters', 'complaints'] }),
+  accessory_change: def({
+    type: 'accessory_change', table: 'accessory_changes', idColumn: 'id',
+    fields: ['id', 'machine_id', 'kind', 'spec', 'value', 'changed_at', 'changed_by', 'note', 'created_at'],
+    domains: ['accessories', 'dashboard'],
   }),
   packing: def({
     type: 'packing', table: 'packing', idColumn: 'id',
-    fields: ['id', 'lot_id', 'pack_date', 'pack_weight_kg', 'packs_count', 'cones_per_pack', 'total_kg', 'pack_from', 'pack_to', 'created_by', 'created_at'],
-    domains: ['lots', 'dispatches'],
+    fields: ['id', 'lot_id', 'packed_at', 'packer_id', 'package_type', 'cones_packed', 'partial_cones', 'cartons', 'net_kg', 'tare_kg', 'gross_kg', 'avg_cone_kg', 'color_actual', 'color_master', 'color_ok', 'slip_no', 'carton_from', 'carton_to', 'label_template', 'pallets', 'fg_location', 'notes', 'created_at'],
+    domains: ['lots', 'dispatches', 'accessories', 'dashboard'],
   }),
   qa_override: def({ type: 'qa_override', table: 'qa_overrides', idColumn: 'id', fields: ['id', 'lot_id', 'reason', 'approved_by', 'created_at'], domains: ['dispatches', 'lots'] }),
   dispatch: def({
     type: 'dispatch', table: 'dispatches', idColumn: 'id',
-    fields: ['id', 'dispatch_no', 'customer_id', 'count_id', 'quantity_kg', 'dispatch_date', 'pack_weight_kg', 'packs_count', 'cones_count', 'vehicle_no', 'lr_no', 'invoice_no', 'gate', 'override_ids', 'passport_code', 'status', 'created_by', 'created_at'],
+    fields: ['id', 'dispatch_no', 'customer_id', 'order_id', 'count_id', 'quantity_kg', 'dispatch_date', 'dispatched_at', 'invoice_no', 'invoice_date', 'vehicle_no', 'driver_name', 'driver_phone', 'transporter', 'lr_no', 'destination', 'cartons', 'cones_count', 'net_kg', 'gross_kg', 'delivered_at', 'gate', 'override_ids', 'qa_released', 'passport_code', 'status', 'remarks', 'created_by', 'created_at'],
     jsonFields: ['gate', 'override_ids'], domains: ['dispatches', 'lots', 'dashboard'],
   }),
-  dispatch_lot: def({ type: 'dispatch_lot', table: 'dispatch_lots', idColumn: 'id', fields: ['id', 'dispatch_id', 'lot_id', 'quantity_kg'], domains: ['dispatches', 'lots'] }),
+  dispatch_lot: def({ type: 'dispatch_lot', table: 'dispatch_lots', idColumn: 'id', fields: ['id', 'dispatch_id', 'lot_id', 'quantity_kg', 'cartons'], domains: ['dispatches', 'lots'] }),
   passport: def({ type: 'passport', table: 'passports', idColumn: 'code', fields: ['code', 'dispatch_id', 'issued_at'], domains: ['dispatches'] }),
   document: def({
     type: 'document', table: 'documents', idColumn: 'id',
-    fields: ['id', 'sha256', 'filename', 'mime_type', 'size_bytes', 'storage_path', 'uploaded_by', 'uploaded_at'],
+    fields: ['id', 'sha256', 'filename', 'mime_type', 'size_bytes', 'storage_path', 'ref_type', 'ref_id', 'uploaded_by', 'uploaded_at'],
     domains: ['documents', 'complaints'],
   }),
   complaint: def({
     type: 'complaint', table: 'complaints', idColumn: 'id',
-    fields: ['id', 'complaint_no', 'seq', 'year', 'complainant_name', 'type', 'customer_id', 'lot_id', 'dispatch_id', 'description', 'document_id', 'status', 'received_date', 'created_by', 'created_at', 'updated_at'],
+    fields: ['id', 'complaint_no', 'seq', 'year', 'complainant_name', 'type', 'source', 'customer_id', 'lot_id', 'dispatch_id', 'description', 'document_id', 'status', 'received_date', 'created_by', 'created_at', 'updated_at'],
     domains: ['complaints', 'dashboard'],
   }),
   complaint_event: def({
@@ -91,7 +107,7 @@ export const ENTITIES: Record<string, EntityDef> = {
   }),
   conclusion: def({
     type: 'conclusion', table: 'conclusions', idColumn: 'id',
-    fields: ['id', 'complaint_id', 'analysis_id', 'conclusion_html', 'root_cause', 'corrective_action', 'preventive_action', 'concluded_by', 'concluded_at'],
+    fields: ['id', 'complaint_id', 'analysis_id', 'conclusion_html', 'root_cause', 'corrective_action', 'preventive_action', 'customer_reply', 'concluded_by', 'concluded_at'],
     domains: ['complaints', 'dashboard'],
   }),
 };

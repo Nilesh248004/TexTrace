@@ -1,0 +1,15 @@
+import { useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useGet, useMut } from '../lib/api';
+import { COMPLAINT_TYPES, COMPLAINT_TYPE_LABEL, type ComplaintType } from '@shared/params';
+import { Card, CardBody, Field, Loading, Notice, PageHead } from '../components/ui';
+
+interface Lot { id: string; lotNo: string; countDisplay: string; customerId: string | null; customerName: string | null }
+export default function ComplaintNew(): JSX.Element {
+  const [sp] = useSearchParams(); const nav = useNavigate(); const lots = useGet<Lot[]>('/api/lots'); const create = useMut<{ lotId: string; type: ComplaintType; description: string }, { id: string }>('POST', '/api/complaints', 'Register customer complaint');
+  const [lotId, setLotId] = useState(''); const [type, setType] = useState<ComplaintType>('HAIRINESS'); const [description, setDescription] = useState(''); const [error, setError] = useState('');
+  const pre = sp.get('lot'); const submit = async () => { try { setError(''); const out = await create.mutateAsync({ lotId, type, description }); nav(`/complaints/${out.id}`); } catch (e) { setError(e instanceof Error ? e.message : 'Could not register complaint'); } };
+  const selected = lots.data?.find((x) => x.id === lotId); const initial = lots.data?.find((x) => x.lotNo === pre);
+  if (!lotId && initial) setTimeout(() => setLotId(initial.id), 0);
+  return <div className="page" data-testid="complaint-new"><PageHead eyebrow="CUSTOMER SERVICE" title="Register a complaint" sub="Select the sold lot; the investigation workspace will automatically assemble dispatch, packing, mix, bale and process evidence." /><Loading q={lots}>{lots.data ? <Card><CardBody className="stack"><Field label="Customer lot"><select className="select" value={lotId} onChange={(e) => setLotId(e.target.value)}><option value="">Select a lot</option>{lots.data.filter((x) => x.customerId).map((x) => <option key={x.id} value={x.id}>Lot {x.lotNo} · {x.countDisplay} · {x.customerName}</option>)}</select></Field>{selected ? <Notice tone="info">Lot {selected.lotNo} belongs to {selected.customerName}. Its traceability record will be attached automatically.</Notice> : null}<Field label="Issue type"><select className="select" value={type} onChange={(e) => setType(e.target.value as ComplaintType)}>{COMPLAINT_TYPES.map((x) => <option key={x} value={x}>{COMPLAINT_TYPE_LABEL[x]}</option>)}</select></Field><Field label="Customer description"><textarea className="textarea" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Describe what the customer observed, where and when." /></Field>{error ? <Notice tone="bad">{error}</Notice> : null}<button className="btn primary" disabled={!lotId || !description || create.isPending} onClick={submit}>{create.isPending ? 'Registering…' : 'Register and open investigation'}</button></CardBody></Card> : null}</Loading></div>;
+}
