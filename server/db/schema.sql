@@ -510,3 +510,21 @@ CREATE TABLE IF NOT EXISTS conclusions (
 CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(timestamp);
 CREATE INDEX IF NOT EXISTS idx_tx_contract ON ledger_txs(contract, fn);
 CREATE INDEX IF NOT EXISTS idx_anchor_entity ON entity_anchors(entity_type, entity_id);
+
+
+-- PDF Import staging: extracted content is reviewed before mapping to mill records.
+CREATE TABLE IF NOT EXISTS pdf_import_jobs (
+  id             TEXT PRIMARY KEY,
+  file_name      TEXT NOT NULL,
+  source_sha256  TEXT NOT NULL,
+  page_count     INTEGER NOT NULL DEFAULT 0,
+  file_size      INTEGER NOT NULL DEFAULT 0,
+  extracted_text TEXT NOT NULL,
+  status         TEXT NOT NULL DEFAULT 'PREVIEW',
+  uploaded_by    TEXT NOT NULL,
+  uploaded_at    TEXT NOT NULL,
+  reviewed_by    TEXT,
+  reviewed_at    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_pdf_import_uploaded_at
+  ON pdf_import_jobs(uploaded_at);

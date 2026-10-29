@@ -8,7 +8,8 @@ import type { ApiCtx, AuthedRequest } from './common';
 import { newRouter } from './common';
 import { act, fail, notFound, ok, parseJson, qs } from './common';
 import { config } from '../config';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { hashObject } from '../lib/hash';
 import { nowIso } from '../lib/clock';
 import { peekSeq } from '../db';
@@ -16,6 +17,11 @@ import { buildPassport, chainOf } from '../domain/lots';
 import { runEngine } from '../analysis/engine';
 import { narrate } from '../analysis/narrative';
 import { DEFAULT_LENS, COMPLAINT_TYPE_LABEL, type ComplaintType } from '@shared/params';
+
+const loadPdfModule = createRequire(import.meta.url);
+const pdfParse = loadPdfModule('pdf-parse') as (
+  buffer: Buffer
+) => Promise<{ numpages: number; text?: string }>;
 
 type Row = Record<string, unknown>;
 const str = (v: unknown) => (v === null || v === undefined ? '' : String(v));
@@ -94,6 +100,96 @@ export function complaintsRouter(c: ApiCtx): Router {
   r.get('/analysis', async (req, res) => {
     const rows = await db.prepare('SELECT * FROM analyses WHERE (?=\'\' OR complaint_id=?) AND (?=\'\' OR lot_id=?) ORDER BY created_at DESC LIMIT 100').all<Row>(qs(req.query.complaintId), qs(req.query.complaintId), qs(req.query.lotId), qs(req.query.lotId));
     ok(res, rows.map(analysisDto));
+  });
+
+
+  // PDF Import: extract text for staff review; no automatic production-table writes.
+  r.post('/pdf-import/preview', upload.single('file'), async (req: AuthedRequest, res) => {
+    if (!req.actor || req.actor.role === 'BUYER') {
+      return fail(res, 403, 'PERMISSION_DENIED', 'PDF import is for internal staff only');
+    }
+
+    const f = req.file;
+    if (!f) return fail(res, 422, 'VALIDATION_FAILED', 'Choose a PDF up to 8 MB');
+    if (f.mimetype !== 'application/pdf' || f.buffer.subarray(0, 5).toString() !== '%PDF-') {
+      return fail(res, 422, 'VALIDATION_FAILED', 'The uploaded file is not a valid PDF');
+    }
+
+    let parsed: Awaited<ReturnType<typeof pdfParse>>;
+    try {
+      parsed = await pdfParse(f.buffer);
+    } catch {
+      return fail(res, 422, 'PDF_PARSE_FAILED', 'Could not extract this PDF. It may be damaged, encrypted or scanned.');
+    }
+
+    const fullText = String(parsed.text ?? '').replace(/\u0000/g, '').trim();
+    if (fullText.length < 20) {
+      return fail(res, 422, 'PDF_TEXT_NOT_FOUND', 'No usable text found. OCR is not enabled for scanned PDFs.');
+    }
+
+    const maxChars = 250_000;
+    const extractedText = fullText.slice(0, maxChars);
+    const lines = extractedText.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    const headingPattern = /^(?:\d+[\.)]?\s*)?(?:historical records|bales?|cotton mixes?|mixes?|production lots?|lots?|production stages?|stage runs?|quality|test results?|packing|dispatches?|orders?|complaints?)\b/i;
+    const headings = [...new Set(
+      lines.filter((s) => headingPattern.test(s)).map((s) => s.slice(0, 100))
+    )].slice(0, 30);
+
+    const id = `PDFIMP-${randomUUID()}`;
+    const uploadedAt = nowIso();
+    const sha256 = createHash('sha256').update(f.buffer).digest('hex');
+
+    await db.prepare(
+      'INSERT INTO pdf_import_jobs (id, file_name, source_sha256, page_count, file_size, extracted_text, status, uploaded_by, uploaded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(id, f.originalname.slice(0, 255), sha256, Number(parsed.numpages) || 0, f.size, extractedText, 'PREVIEW', req.actor.id, uploadedAt);
+
+    ok(res, {
+      id, fileName: f.originalname, sha256,
+      pages: Number(parsed.numpages) || 0, bytes: f.size,
+      text: extractedText, lineCount: lines.length, headings,
+      truncated: fullText.length > maxChars,
+      status: 'PREVIEW', uploadedAt,
+    }, 201);
+  });
+
+  r.get('/pdf-import/jobs', async (req: AuthedRequest, res) => {
+    if (!req.actor || req.actor.role === 'BUYER') {
+      return fail(res, 403, 'PERMISSION_DENIED', 'PDF import is for internal staff only');
+    }
+    const rows = await db.prepare(
+      'SELECT id, file_name AS "fileName", source_sha256 AS sha256, page_count AS pages, file_size AS bytes, status, uploaded_at AS "uploadedAt", reviewed_at AS "reviewedAt" FROM pdf_import_jobs ORDER BY uploaded_at DESC LIMIT 50'
+    ).all<Row>();
+    ok(res, rows);
+  });
+
+  r.get('/pdf-import/jobs/:id', async (req: AuthedRequest, res) => {
+    if (!req.actor || req.actor.role === 'BUYER') {
+      return fail(res, 403, 'PERMISSION_DENIED', 'PDF import is for internal staff only');
+    }
+    const job = await db.prepare(
+      'SELECT id, file_name AS "fileName", source_sha256 AS sha256, page_count AS pages, file_size AS bytes, extracted_text AS text, status, uploaded_at AS "uploadedAt", reviewed_at AS "reviewedAt" FROM pdf_import_jobs WHERE id=?'
+    ).get<Row>(req.params.id);
+    if (!job) return notFound(res, 'PDF import');
+    ok(res, job);
+  });
+
+  r.post('/pdf-import/:id/review', async (req: AuthedRequest, res) => {
+    if (!req.actor || req.actor.role === 'BUYER') {
+      return fail(res, 403, 'PERMISSION_DENIED', 'PDF import is for internal staff only');
+    }
+    const existing = await db.prepare(
+      'SELECT id FROM pdf_import_jobs WHERE id=?'
+    ).get<Row>(req.params.id);
+    if (!existing) return notFound(res, 'PDF import');
+
+    await db.prepare(
+      "UPDATE pdf_import_jobs SET status='REVIEWED', reviewed_by=?, reviewed_at=? WHERE id=?"
+    ).run(req.actor.id, nowIso(), req.params.id);
+
+    const job = await db.prepare(
+      'SELECT id, file_name AS "fileName", source_sha256 AS sha256, page_count AS pages, file_size AS bytes, extracted_text AS text, status, uploaded_at AS "uploadedAt", reviewed_at AS "reviewedAt" FROM pdf_import_jobs WHERE id=?'
+    ).get<Row>(req.params.id);
+    ok(res, job);
   });
 
   // ---------------------------------------------------------------- documents (photos / PDFs)

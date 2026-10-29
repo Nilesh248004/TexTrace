@@ -26,7 +26,7 @@ const NAV: { label: string; items: { to: string; label: string; icon: typeof Gau
     { to: '/analytics', label: 'Analytics', icon: BarChart3 },
     { to: '/customers', label: 'Customers', icon: Users },
   ] },
-  { label: 'PLATFORM', items: [{ to: '/developer', label: 'Developer Console', icon: Terminal, roles: ['ADMIN', 'DEVELOPER', 'AUDITOR'] }] },
+  { label: 'PLATFORM', items: [{ to: '/pdf-import', label: 'PDF Import', icon: FileText }, { to: '/developer', label: 'Developer Console', icon: Terminal, roles: ['ADMIN', 'DEVELOPER', 'AUDITOR'] }] },
 ];
 
 export function Shell(): JSX.Element {
