@@ -379,6 +379,14 @@ export async function openPostgresDatabase(
       );
       console.log('[DB] Verified machines.spindles column.');
 
+      // Existing PostgreSQL databases are not changed by CREATE TABLE IF NOT EXISTS.
+      // Keep the historical test-result sample identifier available for collision checks
+      // without inventing identifiers for records that predate this column.
+      await db.exec(
+        'ALTER TABLE test_results ADD COLUMN IF NOT EXISTS sample_id TEXT'
+      );
+      console.log('[DB] Verified test_results.sample_id column.');
+
     } catch (error) {
       console.error(
         '[DB] PostgreSQL schema initialization failed.'
