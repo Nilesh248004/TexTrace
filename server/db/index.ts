@@ -28,17 +28,7 @@ export function openDb(file: string = config.dbFile): DB {
 }
 
 export async function openConfiguredDb(): Promise<DB> {
-  if (!config.databaseUrl) return openDb();
-
-  const db = await openPostgresDatabase(config.databaseUrl, SCHEMA_SQL);
-
-  // Existing PostgreSQL databases may predate this column.
-  // Run this only for PostgreSQL: the shared schema is also executed by SQLite.
-  await db.exec(
-    'ALTER TABLE machines ADD COLUMN IF NOT EXISTS spindles INTEGER NOT NULL DEFAULT 0'
-  );
-
-  return db;
+  return config.databaseUrl ? openPostgresDatabase(config.databaseUrl, SCHEMA_SQL) : openDb();
 }
 
 /** Process-wide connection (lazily opened). Tests may call setDb() with an in-memory DB. */

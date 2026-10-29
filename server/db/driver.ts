@@ -371,6 +371,14 @@ export async function openPostgresDatabase(
 
     try {
       await db.exec(convertedSchema);
+
+      // Compatibility migration for existing PostgreSQL databases.
+      // Keep this out of schema.sql because SQLite also executes that file.
+      await db.exec(
+        'ALTER TABLE machines ADD COLUMN IF NOT EXISTS spindles INTEGER NOT NULL DEFAULT 0'
+      );
+      console.log('[DB] Verified machines.spindles column.');
+
     } catch (error) {
       console.error(
         '[DB] PostgreSQL schema initialization failed.'
