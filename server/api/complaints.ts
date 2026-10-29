@@ -17,7 +17,7 @@ import { peekSeq } from '../db';
 import { buildPassport, chainOf } from '../domain/lots';
 import { runEngine } from '../analysis/engine';
 import { narrate } from '../analysis/narrative';
-import { DEFAULT_LENS, COMPLAINT_TYPE_LABEL, type ComplaintType } from '@shared/params';
+import { DEFAULT_LENS, COMPLAINT_TYPE_LABEL, PARAMS, STAGE_INFO, STAGES, type Stage, type ComplaintType } from '@shared/params';
 
 const loadPdfModule = createRequire(import.meta.url);
 const pdfParse = loadPdfModule('pdf-parse') as (
@@ -592,6 +592,327 @@ ${String(source.extracted_text).slice(0, 180000)}`;
       ...job,
       structured: parseJson(job?.structuredJson, null),
       validation: parseJson(job?.validationJson, null),
+    });
+  });
+
+
+  // Read-only historical import preview. This deliberately does not write production records.
+  r.post('/pdf-import/:id/import-preview', async (req: AuthedRequest, res) => {
+    if (!req.actor || req.actor.role === 'BUYER') {
+      return fail(res, 403, 'PERMISSION_DENIED', 'PDF import is for internal staff only');
+    }
+
+    const source = await db.prepare(
+      'SELECT j.id, j.file_name AS "fileName", j.status, e.structured_json AS "structuredJson", e.validation_json AS "validationJson", e.model_name AS "modelName", e.extracted_at AS "extractedAt" FROM pdf_import_jobs j LEFT JOIN pdf_import_extractions e ON e.job_id=j.id WHERE j.id=?'
+    ).get<Row>(req.params.id);
+
+    if (!source) return notFound(res, 'PDF import');
+    if (typeof source.structuredJson !== 'string' || !source.structuredJson) {
+      return fail(res, 409, 'EXTRACTION_REQUIRED', 'Extract structured data and save the draft before preparing an import preview.');
+    }
+
+    let structured: Record<string, unknown>;
+    try {
+      structured = normalizePdfStructure(parseJson(source.structuredJson, null));
+    } catch {
+      return fail(res, 422, 'INVALID_STRUCTURED_DRAFT', 'The saved structured draft is not valid JSON. Save corrections and revalidate first.');
+    }
+
+    res.setHeader('Cache-Control', 'no-store');
+
+    type PreviewIssue = {
+      level: 'BLOCKER' | 'WARNING';
+      category: string;
+      sourceId: string;
+      message: string;
+    };
+    const issues: PreviewIssue[] = [];
+    const addIssue = (level: PreviewIssue['level'], category: string, sourceId: string, message: string) => {
+      const key = [level, category, sourceId, message].join('|');
+      if (!issues.some((x) => [x.level, x.category, x.sourceId, x.message].join('|') === key)) {
+        issues.push({ level, category, sourceId: sourceId || '(dataset)', message });
+      }
+    };
+    const records = (key: string): Row[] =>
+      ((structured[key] as unknown[]) ?? []).filter(
+        (value): value is Row => !!value && typeof value === 'object' && !Array.isArray(value),
+      );
+    const sourceKey = (category: string, row: Row, index: number): string => {
+      if (category === 'stageRuns') return str(row.batchRef) || (str(row.lotNo) + ' / ' + str(row.stage) + ' / row ' + (index + 1));
+      if (category === 'testResults') {
+        const id = /Test ID:\s*([^,]+)/i.exec(str(row.remarks))?.[1]?.trim();
+        return str(row.testId) || id || (str(row.lotNo) + ' / ' + str(row.stage) + ' / test ' + (index + 1));
+      }
+      if (category === 'packing') return str(row.lotNo) || ('packing row ' + (index + 1));
+      if (category === 'unknownFields') return 'unmapped field ' + (index + 1);
+      return str(row.baleNo ?? row.mixNo ?? row.lotNo ?? row.orderNo ?? row.dispatchNo) || (category + ' row ' + (index + 1));
+    };
+    const required = (category: string, id: string, row: Row, fields: string[]) => {
+      const missing = fields.filter((field) => row[field] === null || row[field] === undefined || row[field] === '');
+      if (missing.length) addIssue('BLOCKER', category, id, 'Missing required field(s): ' + missing.join(', '));
+    };
+    const duplicateSourceIds = (category: string, rows: Row[], key: string) => {
+      const seen = new Set<string>();
+      rows.forEach((row) => {
+        const value = str(row[key]).trim();
+        if (!value) return;
+        if (seen.has(value)) addIssue('BLOCKER', category, value, 'Duplicate source identifier "' + value + '" in this PDF.');
+        seen.add(value);
+      });
+    };
+    const readLive = async (label: string, sql: string): Promise<Row[] | null> => {
+      try {
+        return await db.prepare(sql).all<Row>();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'database lookup failed';
+        addIssue('BLOCKER', 'database', label, 'Could not check live ' + label + ' for collisions or reference mapping: ' + message);
+        return null;
+      }
+    };
+
+    const bales = records('bales');
+    const mixes = records('mixes');
+    const lots = records('lots');
+    const stageRuns = records('stageRuns');
+    const testResults = records('testResults');
+    const packing = records('packing');
+    const orders = records('orders');
+    const dispatches = records('dispatches');
+    const unknownFields = (structured.unknownFields as unknown[]).filter((x) => x !== null && x !== undefined && String(x).trim());
+
+    duplicateSourceIds('bales', bales, 'baleNo');
+    duplicateSourceIds('mixes', mixes, 'mixNo');
+    duplicateSourceIds('lots', lots, 'lotNo');
+    duplicateSourceIds('orders', orders, 'orderNo');
+    duplicateSourceIds('dispatches', dispatches, 'dispatchNo');
+
+    const [
+      liveCounts, liveBales, liveMixes, liveLots, liveMachines,
+      liveCustomers, liveOrders, liveDispatches, liveRuns, liveTests,
+      livePacking, activeCountMixMasters,
+    ] = await Promise.all([
+      readLive('counts', 'SELECT id, display FROM counts'),
+      readLive('bales', 'SELECT id, bale_no FROM bales'),
+      readLive('mixes', 'SELECT id, mix_no, count_id FROM mixes'),
+      readLive('lots', 'SELECT id, lot_no, lot_code, count_id, mix_id FROM lots'),
+      readLive('machines', 'SELECT id, department, label FROM machines'),
+      readLive('customers', 'SELECT id, name FROM customers'),
+      readLive('orders', 'SELECT id, order_no, customer_id FROM orders'),
+      readLive('dispatches', 'SELECT id, dispatch_no FROM dispatches'),
+      readLive('stage runs', 'SELECT id, batch_ref FROM stage_runs'),
+      readLive('test results', 'SELECT id, sample_id FROM test_results'),
+      readLive('packing records', 'SELECT l.lot_no FROM packing p JOIN lots l ON l.id=p.lot_id'),
+      readLive('active Count & Mix masters', "SELECT count_id FROM master_versions WHERE master_type='COUNT_MIX' AND status='ACTIVE'"),
+    ]);
+
+    const knownCountIds = new Set((liveCounts ?? []).map((x) => str(x.id)));
+    const activeCountIds = new Set((activeCountMixMasters ?? []).map((x) => str(x.count_id)));
+    const knownBaleNos = new Set(bales.map((x) => str(x.baleNo)).filter(Boolean));
+    const knownMixNos = new Set(mixes.map((x) => str(x.mixNo)).filter(Boolean));
+    const knownLotNos = new Set(lots.map((x) => str(x.lotNo)).filter(Boolean));
+    const knownOrderNos = new Set(orders.map((x) => str(x.orderNo)).filter(Boolean));
+    const knownCustomers = new Set((liveCustomers ?? []).map((x) => str(x.name).trim().toLocaleLowerCase()));
+    const machineById = new Map((liveMachines ?? []).map((x) => [str(x.id), x]));
+    const existingBaleKeys = new Set((liveBales ?? []).flatMap((x) => [str(x.id), str(x.bale_no)]).filter(Boolean));
+    const existingMixKeys = new Set((liveMixes ?? []).flatMap((x) => [str(x.id), str(x.mix_no)]).filter(Boolean));
+    const existingLotKeys = new Set((liveLots ?? []).flatMap((x) => [str(x.id), str(x.lot_no), str(x.lot_code)]).filter(Boolean));
+    const existingOrderKeys = new Set((liveOrders ?? []).flatMap((x) => [str(x.id), str(x.order_no)]).filter(Boolean));
+    const existingDispatchKeys = new Set((liveDispatches ?? []).flatMap((x) => [str(x.id), str(x.dispatch_no)]).filter(Boolean));
+    const existingRunKeys = new Set((liveRuns ?? []).flatMap((x) => [str(x.id), str(x.batch_ref)]).filter(Boolean));
+    const existingTestKeys = new Set((liveTests ?? []).flatMap((x) => [str(x.id), str(x.sample_id)]).filter(Boolean));
+    const existingPackedLots = new Set((livePacking ?? []).map((x) => str(x.lot_no)));
+
+    const fibreKeys = ['MIC', 'UHML', 'UI', 'STR', 'SFI', 'TRASH', 'MOIST', 'RD', 'PLUS_B'];
+    for (let i = 0; i < bales.length; i++) {
+      const row = bales[i];
+      const id = sourceKey('bales', row, i);
+      required('bales', id, row, ['baleNo', 'supplier', 'variety', 'weightKg', 'bay', 'bin']);
+      if (Number.isFinite(Number(row.weightKg)) && !(Number(row.weightKg) > 100 && Number(row.weightKg) < 300)) {
+        addIssue('BLOCKER', 'bales', id, 'Weight ' + String(row.weightKg) + ' kg is outside the normal TexTrace bale-registration range (greater than 100 kg and less than 300 kg). Confirm source units; do not auto-scale.');
+      }
+      const fibre = row.fibre && typeof row.fibre === 'object' && !Array.isArray(row.fibre)
+        ? row.fibre as Record<string, unknown> : {};
+      const missingFibre = fibreKeys.filter((key) => typeof fibre[key] !== 'number' || !Number.isFinite(fibre[key] as number));
+      if (missingFibre.length) addIssue('BLOCKER', 'bales', id, 'Missing/non-numeric HVI values: ' + missingFibre.join(', ') + '.');
+      if (existingBaleKeys.has(str(row.baleNo))) addIssue('BLOCKER', 'bales', id, 'Bale identifier "' + str(row.baleNo) + '" already exists in the live database; resolve the collision explicitly.');
+      if (!row.station || !row.ginLot) addIssue('WARNING', 'bales', id, 'Station and/or gin lot are absent from the source; confirm whether blank values are acceptable for historical records.');
+      if (row.status && !['IN_STORE', 'ISSUED'].includes(str(row.status).toUpperCase())) {
+        addIssue('BLOCKER', 'bales', id, 'Source status "' + str(row.status) + '" has no direct mapping to a normal TexTrace bale state.');
+      }
+    }
+
+    for (let i = 0; i < mixes.length; i++) {
+      const row = mixes[i];
+      const id = sourceKey('mixes', row, i);
+      required('mixes', id, row, ['mixNo', 'countId']);
+      if (row.countId && !knownCountIds.has(str(row.countId))) addIssue('BLOCKER', 'mixes', id, 'Count ID "' + str(row.countId) + '" does not exist in live TexTrace counts.');
+      if (row.countId && knownCountIds.has(str(row.countId)) && !activeCountIds.has(str(row.countId))) addIssue('BLOCKER', 'mixes', id, 'No active Count & Mix master exists for count "' + str(row.countId) + '".');
+      const refs = Array.isArray(row.baleNos) ? row.baleNos.map(String) : [];
+      if (refs.length < 3) addIssue('BLOCKER', 'mixes', id, 'Only ' + refs.length + ' bale reference(s) supplied; normal mix registration requires at least 3 eligible bales.');
+      for (const ref of refs) {
+        if (!knownBaleNos.has(ref)) addIssue('BLOCKER', 'mixes', id, 'Referenced bale "' + ref + '" is not included in this draft; explicit existing-bale mapping is required.');
+      }
+      if (existingMixKeys.has(str(row.mixNo))) addIssue('BLOCKER', 'mixes', id, 'Mix identifier "' + str(row.mixNo) + '" already exists in the live database; resolve the collision explicitly.');
+    }
+
+    const stageAliases: Record<string, Stage> = {
+      bale: 'BALE', 'bale store': 'BALE',
+      blowroom: 'BR', 'blow room': 'BR',
+      carding: 'CARD',
+      'drawing breaker': 'DFB', 'drawing – breaker': 'DFB',
+      'drawing finisher': 'DFF', 'drawing – finisher': 'DFF',
+      combing: 'COMB', comber: 'COMB',
+      'ring spinning': 'RF', spinning: 'RF',
+      winding: 'AW', 'auto winding': 'AW',
+      packing: 'PACK', 'finished goods': 'FG',
+      dispatch: 'DISP', delivery: 'DELIV',
+    };
+    const stageFor = (value: unknown): Stage | null => {
+      const raw = str(value).trim();
+      const upper = raw.toUpperCase();
+      if ((STAGES as readonly string[]).includes(upper)) return upper as Stage;
+      const alias = stageAliases[raw.toLowerCase().replace(/\s+/g, ' ')];
+      if (alias) return alias;
+      return STAGES.find((stage) => STAGE_INFO[stage].label.toLowerCase() === raw.toLowerCase()) ?? null;
+    };
+
+    const blockedMixNos = new Set(issues.filter((x) => x.level === 'BLOCKER' && x.category === 'mixes').map((x) => x.sourceId));
+    for (let i = 0; i < lots.length; i++) {
+      const row = lots[i];
+      const id = sourceKey('lots', row, i);
+      required('lots', id, row, ['lotNo', 'countId', 'mixNo', 'plannedKg', 'startDate']);
+      if (row.countId && !knownCountIds.has(str(row.countId))) addIssue('BLOCKER', 'lots', id, 'Count ID "' + str(row.countId) + '" does not exist in live TexTrace counts.');
+      if (row.mixNo && !knownMixNos.has(str(row.mixNo))) addIssue('BLOCKER', 'lots', id, 'Mix "' + str(row.mixNo) + '" is not present in this draft or needs explicit live-ID mapping.');
+      if (row.mixNo && blockedMixNos.has(str(row.mixNo))) addIssue('BLOCKER', 'lots', id, 'Referenced mix "' + str(row.mixNo) + '" is blocked by earlier validation.');
+      if (row.status === 'CLOSED') addIssue('BLOCKER', 'lots', id, 'Source status CLOSED is not a supported normal lot-registration state; a historical-state mapping is required.');
+      else if (row.status === 'QA_HOLD') addIssue('WARNING', 'lots', id, 'Map QA_HOLD to TexTrace ON_HOLD only after QA confirms the equivalent historical state.');
+      else if (row.status === 'IN_PROGRESS') addIssue('WARNING', 'lots', id, 'Map IN_PROGRESS to TexTrace IN_PRODUCTION only after confirming the historical state.');
+      if (existingLotKeys.has(str(row.lotNo))) addIssue('BLOCKER', 'lots', id, 'Lot identifier "' + str(row.lotNo) + '" already exists in the live database; resolve the collision explicitly.');
+    }
+
+    for (let i = 0; i < stageRuns.length; i++) {
+      const row = stageRuns[i];
+      const id = sourceKey('stageRuns', row, i);
+      required('stageRuns', id, row, ['lotNo', 'stage', 'machineId', 'inAt', 'inputKg', 'outputKg', 'wasteKg']);
+      const stage = stageFor(row.stage);
+      if (!stage) addIssue('BLOCKER', 'stageRuns', id, 'Stage "' + str(row.stage) + '" cannot be mapped to a TexTrace stage code.');
+      else if (str(row.stage).toUpperCase() !== stage) addIssue('WARNING', 'stageRuns', id, 'Map source stage "' + str(row.stage) + '" to TexTrace code "' + stage + '" before import.');
+      if (row.machineId && machineById.size && !machineById.has(str(row.machineId))) addIssue('BLOCKER', 'stageRuns', id, 'Machine "' + str(row.machineId) + '" is not a live TexTrace machine ID; map it explicitly.');
+      if (row.lotNo && !knownLotNos.has(str(row.lotNo))) addIssue('BLOCKER', 'stageRuns', id, 'Lot "' + str(row.lotNo) + '" is not present in this draft; explicit lot mapping is required.');
+      if (row.batchRef && existingRunKeys.has(str(row.batchRef))) addIssue('BLOCKER', 'stageRuns', id, 'Run reference "' + str(row.batchRef) + '" already exists in the live database.');
+      if (row.inAt && !/(Z|[+-]\d{2}:?\d{2})$/i.test(str(row.inAt))) addIssue('WARNING', 'stageRuns', id, 'Timestamp has no timezone. Confirm the mill timezone before importing historical times.');
+    }
+
+    for (let i = 0; i < testResults.length; i++) {
+      const row = testResults[i];
+      const id = sourceKey('testResults', row, i);
+      required('testResults', id, row, ['lotNo', 'stage', 'sampleType', 'testedAt', 'values']);
+      const stage = stageFor(row.stage);
+      if (!stage) addIssue('BLOCKER', 'testResults', id, 'Stage "' + str(row.stage) + '" cannot be mapped to a TexTrace stage code.');
+      if (row.lotNo && !knownLotNos.has(str(row.lotNo))) addIssue('BLOCKER', 'testResults', id, 'Lot "' + str(row.lotNo) + '" is not present in this draft; explicit lot mapping is required.');
+      const vals = row.values && typeof row.values === 'object' && !Array.isArray(row.values)
+        ? row.values as Record<string, unknown> : {};
+      for (const [key, value] of Object.entries(vals)) {
+        if (typeof value !== 'number' || !Number.isFinite(value)) {
+          addIssue('BLOCKER', 'testResults', id, 'Measurement "' + key + '" is not a numeric value.');
+        }
+        const allowed = PARAMS.some((param) =>
+          (param.kind === 'QUALITY' || param.kind === 'FIBRE') &&
+          param.key === key && !!stage && param.stages.includes(stage)
+        );
+        if (!allowed) addIssue('BLOCKER', 'testResults', id, 'Parameter "' + key + '" is not an approved TexTrace parameter key for stage "' + str(row.stage) + '"; map it explicitly.');
+      }
+      if (row.testedAt && !/(Z|[+-]\d{2}:?\d{2})$/i.test(str(row.testedAt))) addIssue('WARNING', 'testResults', id, 'Test timestamp has no timezone. Confirm the mill timezone before importing.');
+      if (row.sampleId && existingTestKeys.has(str(row.sampleId))) addIssue('BLOCKER', 'testResults', id, 'Sample ID "' + str(row.sampleId) + '" already exists in the live database.');
+    }
+
+    for (let i = 0; i < packing.length; i++) {
+      const row = packing[i];
+      const id = sourceKey('packing', row, i);
+      required('packing', id, row, ['lotNo', 'packedAt', 'packerId', 'packageType', 'conesPacked', 'cartons', 'netKg', 'tareKg', 'grossKg', 'avgConeKg', 'colorActual', 'colorMaster', 'colorOk', 'slipNo', 'cartonFrom', 'cartonTo']);
+      if (existingPackedLots.has(str(row.lotNo))) addIssue('BLOCKER', 'packing', id, 'Lot "' + str(row.lotNo) + '" already has a packing record in the live database.');
+      if (!knownLotNos.has(str(row.lotNo))) addIssue('BLOCKER', 'packing', id, 'Lot "' + str(row.lotNo) + '" is not present in this draft; explicit lot mapping is required.');
+      if (!row.packedAt) addIssue('BLOCKER', 'packing', id, 'Source only contains an order-level packed weight, not a complete historical packing event.');
+    }
+
+    for (let i = 0; i < orders.length; i++) {
+      const row = orders[i];
+      const id = sourceKey('orders', row, i);
+      required('orders', id, row, ['orderNo', 'customerName', 'countId', 'qtyKg', 'orderedAt', 'dueDate', 'status']);
+      if (row.customerName && !knownCustomers.has(str(row.customerName).trim().toLocaleLowerCase())) addIssue('BLOCKER', 'orders', id, 'Customer "' + str(row.customerName) + '" does not exactly match a live TexTrace customer; map or explicitly create the customer.');
+      if (row.countId && !knownCountIds.has(str(row.countId))) addIssue('BLOCKER', 'orders', id, 'Count ID "' + str(row.countId) + '" does not exist in live TexTrace counts.');
+      if (row.status && !['OPEN', 'PARTIAL', 'COMPLETE'].includes(str(row.status).toUpperCase())) addIssue('BLOCKER', 'orders', id, 'Source status "' + str(row.status) + '" is not a supported TexTrace order status.');
+      if (existingOrderKeys.has(str(row.orderNo))) addIssue('BLOCKER', 'orders', id, 'Order identifier "' + str(row.orderNo) + '" already exists in the live database.');
+    }
+
+    for (let i = 0; i < dispatches.length; i++) {
+      const row = dispatches[i];
+      const id = sourceKey('dispatches', row, i);
+      required('dispatches', id, row, ['dispatchNo', 'customerName', 'orderNo', 'dispatchedAt', 'quantityKg', 'status']);
+      if (row.customerName && !knownCustomers.has(str(row.customerName).trim().toLocaleLowerCase())) addIssue('BLOCKER', 'dispatches', id, 'Customer "' + str(row.customerName) + '" does not exactly match a live TexTrace customer.');
+      if (row.orderNo && !knownOrderNos.has(str(row.orderNo))) addIssue('BLOCKER', 'dispatches', id, 'Order "' + str(row.orderNo) + '" is not present in this draft; explicit mapping is required.');
+      if (str(row.status).toUpperCase() === 'PENDING') addIssue('BLOCKER', 'dispatches', id, 'A pending source row is not a completed dispatch and must not be imported as a shipment.');
+      if (str(row.status).toUpperCase() === 'DISPATCHED') {
+        const missingLogistics = ['invoiceNo', 'vehicleNo', 'transporter', 'lrNo', 'destination'].filter((key) => !row[key]);
+        if (missingLogistics.length) addIssue('BLOCKER', 'dispatches', id, 'Missing required historical logistics data: ' + missingLogistics.join(', ') + '.');
+        addIssue('WARNING', 'dispatches', id, 'QA release and dispatch gate must be recomputed against TexTrace records; source QA labels cannot authorize dispatch.');
+      }
+      if (existingDispatchKeys.has(str(row.dispatchNo))) addIssue('BLOCKER', 'dispatches', id, 'Dispatch identifier "' + str(row.dispatchNo) + '" already exists in the live database.');
+    }
+
+    unknownFields.forEach((value, index) => {
+      addIssue('BLOCKER', 'unknownFields', 'unmapped field ' + (index + 1), 'Unclassified source content needs an explicit destination or documented exclusion: ' + String(value).slice(0, 300));
+    });
+
+    addIssue('WARNING', 'dataset', str(source.fileName), 'This endpoint is a read-only dry run. It does not insert production records; any future import must preserve approved historical identities and dates and use an auditable transaction.');
+
+    const categoryDefs = [
+      ['bales', 'Bale receipts', bales],
+      ['mixes', 'Cotton mixes', mixes],
+      ['lots', 'Production lots', lots],
+      ['stageRuns', 'Production stage runs', stageRuns],
+      ['testResults', 'Quality tests', testResults],
+      ['packing', 'Packing records', packing],
+      ['orders', 'Customer orders', orders],
+      ['dispatches', 'Dispatch records', dispatches],
+      ['unknownFields', 'Unmapped source content', unknownFields.map((value) => ({ value }))],
+    ] as const;
+
+    const categories = categoryDefs.map(([key, label, rows]) => {
+      const categoryIssues = issues.filter((issue) => issue.category === key);
+      const blockedIds = new Set(categoryIssues.filter((issue) => issue.level === 'BLOCKER').map((issue) => issue.sourceId));
+      const warnedIds = new Set(categoryIssues.filter((issue) => issue.level === 'WARNING').map((issue) => issue.sourceId));
+      const blocked = blockedIds.size;
+      const needsReview = [...warnedIds].filter((id) => !blockedIds.has(id)).length;
+      return {
+        key, label, total: rows.length,
+        ready: Math.max(0, rows.length - blocked - needsReview),
+        blocked, needsReview,
+      };
+    });
+
+    const blockerCount = issues.filter((x) => x.level === 'BLOCKER').length;
+    const warningCount = issues.filter((x) => x.level === 'WARNING').length;
+    const recordCount = categoryDefs.reduce((total, [, , rows]) => total + rows.length, 0);
+    const readiness = blockerCount > 0 ? 'BLOCKED' : warningCount > 0 ? 'NEEDS_REVIEW' : 'READY_FOR_APPROVAL';
+
+    ok(res, {
+      jobId: str(source.id),
+      fileName: str(source.fileName),
+      generatedAt: nowIso(),
+      dryRun: true,
+      productionWrites: false,
+      importActionAvailable: false,
+      readiness,
+      summary: { recordCount, blockerCount, warningCount },
+      categories,
+      issues: issues.slice(0, 500),
+      issuesTruncated: issues.length > 500,
+      notes: [
+        'No production records were changed.',
+        'A clean preview is not an import approval; the actual historical import action is a separate implementation step.',
+        'Synthetic or inferred values must remain explicitly identified as demo data.',
+      ],
     });
   });
 
