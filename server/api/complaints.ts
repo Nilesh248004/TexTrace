@@ -879,7 +879,6 @@ ${String(source.extracted_text).slice(0, 180000)}`;
     ] as const;
 
     const categories = categoryDefs.map(([key, label, rows]) => {
-      const ids = rows.map((row, index) => sourceKey(key, row as Row, index));
       const categoryIssues = issues.filter((issue) => issue.category === key);
       const blockedIds = new Set(categoryIssues.filter((issue) => issue.level === 'BLOCKER').map((issue) => issue.sourceId));
       const warnedIds = new Set(categoryIssues.filter((issue) => issue.level === 'WARNING').map((issue) => issue.sourceId));
