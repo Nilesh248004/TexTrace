@@ -1,3 +1,5 @@
+> **Superseded.** This document describes TexTrace v1 (bale-to-cone prototype). The current product is v2 — see [README.md](../README.md), [V2_AUDIT.md](V2_AUDIT.md) and [V2_CLIENT_GUIDE.md](V2_CLIENT_GUIDE.md). Ledger, contract-runtime and color-logic sections below still apply.
+
 # TexTrace — Build Specification (internal, for implementers)
 
 TexTrace is a blockchain-based **fibre-to-yarn (bale-to-cone) traceability dashboard** for a spinning mill

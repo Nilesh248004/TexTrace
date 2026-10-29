@@ -5,9 +5,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from '../config';
 import type { Settings } from '@shared/types';
-import { DEFAULT_LOT_CODE_FORMAT, DEFAULT_LOT_NO_FORMAT } from '@shared/format';
-import { DEFAULT_QUALITY_COLUMNS } from '@shared/params';
 import { DEFAULT_WARN_FRACTION } from '@shared/quality';
+import { today } from '../lib/clock';
 import { openPostgresDatabase, postgresSchema, SqliteDatabase, type DB } from './driver';
 
 export type { DB } from './driver';
@@ -47,9 +46,15 @@ export async function wipeDb(db: DB = getDb()): Promise<void> {
   const tables = db.dialect === 'postgres'
     ? await db.prepare(`SELECT tablename AS name FROM pg_tables WHERE schemaname='public'`).all<{ name: string }>()
     : await db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`).all<{ name: string }>();
-  await db.transaction(async () => {
-    for (const table of tables) await db.exec(`DROP TABLE IF EXISTS "${table.name}"${db.dialect === 'postgres' ? ' CASCADE' : ''}`);
-  })();
+  // SQLite enforces foreign keys while dropping tables: switch enforcement off (it is a no-op inside a transaction), drop everything, switch it back on.
+  if (db.dialect === 'sqlite') await db.exec('PRAGMA foreign_keys = OFF');
+  try {
+    await db.transaction(async () => {
+      for (const table of tables) await db.exec(`DROP TABLE IF EXISTS "${table.name}"${db.dialect === 'postgres' ? ' CASCADE' : ''}`);
+    })();
+  } finally {
+    if (db.dialect === 'sqlite') await db.exec('PRAGMA foreign_keys = ON');
+  }
   await db.exec(db.dialect === 'postgres' ? postgresSchema(SCHEMA_SQL) : SCHEMA_SQL);
 }
 
@@ -98,18 +103,16 @@ export async function newId(db: DB, prefix: string, pad = 6): Promise<string> {
 
 export const DEFAULT_SETTINGS: Settings = {
   millName: config.millName,
-  lotNoFormat: DEFAULT_LOT_NO_FORMAT,
-  lotCodeFormat: DEFAULT_LOT_CODE_FORMAT,
-  lotMark: 'X',
   warnFraction: DEFAULT_WARN_FRACTION,
   businessDate: config.defaultBusinessDate,
-  qualityColumns: DEFAULT_QUALITY_COLUMNS,
+  nowIso: config.seedNowIso,
 };
 
 export async function getSettings(db: DB = getDb()): Promise<Settings> {
   const rows = await db.prepare(`SELECT key, value FROM settings`).all<{ key: string; value: string }>();
   const s: Settings = { ...DEFAULT_SETTINGS };
   for (const r of rows) (s as unknown as Record<string, unknown>)[r.key] = parseJson(r.value, null);
+  s.businessDate = today();
   return s;
 }
 

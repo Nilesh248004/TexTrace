@@ -17,12 +17,12 @@
       rel="stylesheet"
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
     />
-    <title>TexTrace — Bale-to-Cone Traceability</title>
+    <title>TexTrace — Mill-to-Customer Traceability</title>
     <script>
       // Apply the persisted theme before first paint to avoid a light/dark flash.
       (function () {
         try {
-          var raw = localStorage.getItem('textrace.theme');
+          var raw = localStorage.getItem('textrace.ui');
           var theme = raw ? (JSON.parse(raw).state || {}).theme : 'system';
           var dark = theme === 'dark' || ((!theme || theme === 'system') && window.matchMedia('(prefers-color-scheme: dark)').matches);
           if (dark) document.documentElement.classList.add('dark');

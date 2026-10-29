@@ -35,6 +35,8 @@ export const config = {
       return !!this.apiKey;
     },
   },
-  /** Seed "today" used for dashboards and default dates. */
-  defaultBusinessDate: '2026-10-16',
+  /** Demo "today" used for dashboards and default dates; seed data is generated relative to it. */
+  defaultBusinessDate: '2026-10-28',
+  /** Demo clock at seed time (15:10 IST on the business date). */
+  seedNowIso: '2026-10-28T09:40:00.000Z',
 };

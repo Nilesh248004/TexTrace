@@ -7,6 +7,9 @@ import { getDb, toJson } from '../db';
 import type { DB } from '../db';
 import { bus } from '../lib/events';
 import { hashObject } from '../lib/hash';
+import { extractRefs } from '../lib/refs';
+import { nowIso, noteLedgerTime } from '../lib/clock';
+import { invalidateMasters } from '../domain/masters';
 import type { CommitResult, LedgerService, PendingTx } from '../ledger/types';
 import { SimulatedLedger } from '../ledger/simulated';
 import { createContext, type ContextState } from './context';
@@ -25,11 +28,11 @@ function safeJson(value: unknown): unknown {
   return text.length > 20_000 ? `${text.slice(0, 20_000)}…(truncated ${text.length - 20_000} bytes)` : value;
 }
 async function addAudit(db: DB, trace: DevTrace): Promise<void> {
-  await db.prepare(`INSERT INTO audit_log(action_id,timestamp,user_id,username,role,action,label,method,path,accepted,reason,contracts,tx_hashes,block_number,trace)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+  await db.prepare(`INSERT INTO audit_log(action_id,timestamp,user_id,username,role,action,label,method,path,accepted,reason,contracts,tx_hashes,block_number,refs,trace)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     trace.actionId, trace.timestamp, trace.user?.id ?? null, trace.user?.username ?? null, trace.user?.role ?? null,
     trace.action, trace.label, trace.request.method, trace.request.path, trace.accepted ? 1 : 0, trace.reason,
-    JSON.stringify(trace.invocations.map((i) => `${i.contract}.${i.fn}`)), JSON.stringify(trace.txHashes), trace.blockNumber, toJson(trace),
+    JSON.stringify(trace.invocations.map((i) => `${i.contract}.${i.fn}`)), JSON.stringify(trace.txHashes), trace.blockNumber, extractRefs(trace.label, trace.request.body, trace.dbDiff.map((c) => c.after)), toJson(trace),
   );
 }
 
@@ -53,6 +56,7 @@ export function createRuntime(db: DB = getDb(), ledger: LedgerService = new Simu
     async run<R>(req: ActionRequest, body: (x: import('./types').ActionExecutor) => Promise<R> | R): Promise<ActionResult<R>> {
       const started = Date.now();
       const actionId = randomUUID();
+      const stamp = req.timestamp ?? nowIso();
       const invocations: ContractInvocation[] = [];
       const changes: DevTrace['dbDiff'] = [];
       const txs: PendingTx[] = [];
@@ -83,7 +87,7 @@ export function createRuntime(db: DB = getDb(), ledger: LedgerService = new Simu
             const mod = moduleByName.get(contractName as never);
             const definition = mod?.functions[fnName];
             if (!definition) throw new ContractRejection('contract-function', `${key} is not implemented`, 'CONTRACT_REJECTED');
-            const ctx = await createContext(db, req.actor, req.timestamp ?? new Date().toISOString(), contractName as never, fnName, state);
+            const ctx = await createContext(db, req.actor, stamp, contractName as never, fnName, state);
             try {
               const value = await definition.handler(ctx, args);
               changes.push(...state.changes);
@@ -102,7 +106,7 @@ export function createRuntime(db: DB = getDb(), ledger: LedgerService = new Simu
             }
           },
         });
-        commit = await ledger.commit(txs, { timestamp: req.timestamp });
+        commit = await ledger.commit(txs, { timestamp: stamp });
         for (const txResult of commit.txs) {
           const invocation = invocations.find((i) => i.contract === txResult.contract && i.fn === txResult.fn && !i.txHash);
           if (invocation) { invocation.txHash = txResult.txHash; invocation.blockNumber = txResult.blockNumber; }
@@ -129,7 +133,7 @@ export function createRuntime(db: DB = getDb(), ledger: LedgerService = new Simu
         const permissionDenied = rejection.code === 'PERMISSION_DENIED';
         const [c, f] = permissionDenied ? ['Access', 'checkPermission'] : failed.split('.');
         const payload = permissionDenied ? { requested: failed, role: req.actor.role, userId: req.actor.id, argsHash: hashObject(failedPayload) } : failedPayload;
-        commit = await ledger.commit([{ contract: c as PendingTx['contract'], fn: f, payload, actorId: req.actor.id, actorRole: req.actor.role, status: 'INVALID', reason: `${rejection.rule}: ${rejection.message}`, entityRefs: [] }], { timestamp: req.timestamp });
+        commit = await ledger.commit([{ contract: c as PendingTx['contract'], fn: f, payload, actorId: req.actor.id, actorRole: req.actor.role, status: 'INVALID', reason: `${rejection.rule}: ${rejection.message}`, entityRefs: [] }], { timestamp: stamp });
       }
 
       const status = rejection ? (STATUS[rejection.code] ?? 422) : 200;
@@ -140,6 +144,8 @@ export function createRuntime(db: DB = getDb(), ledger: LedgerService = new Simu
         invocations, accepted: !rejection, reason, txHashes: (commit as NonNullable<typeof commit>).txs.map((t) => t.txHash), blockNumber: (commit as NonNullable<typeof commit>).block.number,
         validatorApprovals: (commit as NonNullable<typeof commit>).block.approvals, dbDiff: rejection ? [] : changes, durationMs: Date.now() - started, extra: req.extra ?? null,
       };
+      noteLedgerTime((commit as NonNullable<typeof commit>).block.timestamp);
+      if ([...touched].some((t) => t === 'master_version' || t === 'master_item')) invalidateMasters();
       if (!req.silent) {
         await addAudit(db, trace);
         bus.publish({ type: 'trace', data: trace });

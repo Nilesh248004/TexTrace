@@ -1,3 +1,5 @@
+> **Superseded.** This document describes TexTrace v1 (bale-to-cone prototype). The current product is v2 — see [README.md](../README.md), [V2_AUDIT.md](V2_AUDIT.md) and [V2_CLIENT_GUIDE.md](V2_CLIENT_GUIDE.md). Ledger, contract-runtime and color-logic sections below still apply.
+
 # TexTrace — Frontend contract (internal, for implementers)
 
 Read with `docs/SPEC.md` (§4 color logic, §12 developer view, §13 screens, §14 demo, §15 UI/UX) and `shared/api.ts`

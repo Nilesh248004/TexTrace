@@ -20,7 +20,7 @@ export const AccessContract: ContractModule = {
       rules: ['settings-valid'],
       async handler(ctx, args: { patch: Record<string, unknown> }) {
         for (const [key, value] of Object.entries(args.patch)) {
-          ctx.check('settings-key', ['millName', 'lotNoFormat', 'lotCodeFormat', 'lotMark', 'warnFraction', 'businessDate', 'qualityColumns'].includes(key), `Unknown setting ${key}`);
+          ctx.check('settings-key', ['millName', 'warnFraction'].includes(key), `Unknown setting ${key}`);
           const stored = await ctx.get('SELECT key FROM settings WHERE key=?', key);
           if (stored) await ctx.updateRaw('settings', 'key', key, { value: JSON.stringify(value) });
           else await ctx.insertRaw('settings', { key, value: JSON.stringify(value) });
