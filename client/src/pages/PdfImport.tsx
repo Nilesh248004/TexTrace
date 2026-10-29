@@ -162,7 +162,7 @@ export default function PdfImport(): JSX.Element {
       const job = await api<ImportJob>(
         `/api/pdf-import/${encodeURIComponent(current.id)}/extract`,
         token,
-        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmDemoData: isDemoDataset }) },
       );
       setCurrent(job);
       setStructuredDraft(JSON.stringify(job.structured ?? {}, null, 2));
@@ -259,8 +259,13 @@ export default function PdfImport(): JSX.Element {
 
   async function importEligibleBales() {
     if (!current) return;
+    const isDemoDataset =
+      current.structured?.validationMode === 'DEMO_ONLY' &&
+      current.structured?.datasetLabel === 'TEXTRACE-DEMO-2026-10';
     const confirmed = window.confirm(
-      'Import eligible bale records into TexTrace now? This writes production records through the AssetID contract. Blocked records will be skipped and retained in staging.'
+      isDemoDataset
+        ? 'This is synthetic DEMO data. Import eligible bale records into TexTrace? This will write demo records to the current database through the AssetID contract. Blocked records will be skipped.'
+        : 'Import eligible bale records into TexTrace now? This writes production records through the AssetID contract. Blocked records will be skipped and retained in staging.'
     );
     if (!confirmed) return;
     setBusy(true);
