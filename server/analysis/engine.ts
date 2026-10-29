@@ -52,9 +52,9 @@ function observe(b: LotBundle, d: LotData, book: MasterBook, item: LensItem, mod
     return out;
   }
   if (def.kind === 'FIBRE') {
-    const mixVal = parse<Record<string, number>>(b.mix.fibre, {})[item.key];
+    const mixVal = parse<Record<string, number>>(b.mix?.fibre, {})[item.key];
     const at = istDate(str(b.runs.find((r) => r.stage === 'BR')?.in_at ?? b.lot.created_at));
-    if (typeof mixVal === 'number') out.push(mk('FIBRE', book.judge(countId, 'COUNT_MIX', 'MIX', item.key, mixVal, at, mode), { label: def.label, runId: str(b.mix.id), date: at, dates: [at] }));
+    if (typeof mixVal === 'number') out.push(mk('FIBRE', book.judge(countId, 'COUNT_MIX', 'MIX', item.key, mixVal, at, mode), { label: def.label, runId: str(b.mix?.id), date: at, dates: [at] }));
     return out;
   }
   if (def.kind === 'QUALITY') {
@@ -184,7 +184,7 @@ export async function runEngine(db: DB, input: EngineInput, nowIso: string): Pro
     const bad = [...causal, ...symptomBad].sort((a, b) => sev(b) - sev(a));
     const prod = causal.filter((o) => o.kind === 'PRODUCTION' && o.key !== 'RH_PCT'); const acc = causal.filter((o) => o.kind === 'ACCESSORY');
     let category: AnalysisCause['category']; let title: string;
-    if (s.key === 'MIX') { category = 'MIX_FIBRE'; title = `Cotton mix ${str(target.mix.mix_no)}: ${causal.map((o) => o.label.toLowerCase()).slice(0, 2).join(' and ')} outside the master`; }
+    if (s.key === 'MIX') { category = 'MIX_FIBRE'; title = `Cotton mix ${str(target.mix?.mix_no) || 'Unavailable'}: ${causal.map((o) => o.label.toLowerCase()).slice(0, 2).join(' and ')} outside the master`; }
     else if (s.key === 'PACK') { category = 'PACKING'; title = `Packing: ${causal.map((o) => o.label.toLowerCase()).slice(0, 2).join(' and ')} outside the master`; }
     else {
       category = prod.length && acc.length ? 'MACHINE_AND_ACCESSORY' : acc.length ? 'ACCESSORY_WEAR' : prod.length ? 'MACHINE_SETTING' : 'ENVIRONMENT';
@@ -245,7 +245,7 @@ export async function runEngine(db: DB, input: EngineInput, nowIso: string): Pro
     if (s.key === 'MIX') {
       for (const b of [...all.lots.values()].filter((x) => x.lot.mix_id === target.lot.mix_id && x.lot.id !== target.lot.id)) {
         const sym = aggOf(b).filter((o) => o.kind === 'QUALITY' && o.machineId && flagged(o) && symptomKeys.has(o.key));
-        addRecall(b, `shares mix ${str(target.mix.mix_no)}${sym.length ? ` (${sym[0].label} ${fmt(sym[0].value, sym[0].key)} on ${sym[0].machineLabel})` : ''}`, sym.some((o) => o.color === 'red') ? 'HIGH' : 'MEDIUM');
+        addRecall(b, `shares mix ${str(target.mix?.mix_no) || 'Unavailable'}${sym.length ? ` (${sym[0].label} ${fmt(sym[0].value, sym[0].key)} on ${sym[0].machineLabel})` : ''}`, sym.some((o) => o.color === 'red') ? 'HIGH' : 'MEDIUM');
         if (!c.affected.lots.includes(str(b.lot.lot_no))) c.affected.lots.push(str(b.lot.lot_no));
       }
       continue;
@@ -300,7 +300,7 @@ export async function runEngine(db: DB, input: EngineInput, nowIso: string): Pro
   const top = causes.slice(0, 4);
   for (const c of top) {
     if (c.explanation) continue;
-    const loc = c.machineId ? labelOf(c.machineId) : c.category === 'MIX_FIBRE' ? `mix ${str(target.mix.mix_no)}` : 'packing';
+    const loc = c.machineId ? labelOf(c.machineId) : c.category === 'MIX_FIBRE' ? `mix ${str(target.mix?.mix_no) || 'Unavailable'}` : 'packing';
     const causalN = c.evidence.filter((e) => e.color !== 'green' && e.stage !== 'BALE').length;
     const others = c.affected.lots.filter((l) => l !== str(target.lot.lot_no));
     c.explanation = `${causalN} ${plural(causalN, 'reading')} at ${loc} ${causalN === 1 ? 'is' : 'are'} outside the master${c.symptomAt.length ? `, and the symptom shows there (${c.symptomAt.slice(0, 2).join('; ')})` : ''}. ${others.length ? `The same condition appears on ${plural(others.length, 'lot')} ${others.join(', ')}. ` : ''}${c.contrast[0] ?? ''}`.trim();
@@ -321,7 +321,7 @@ export async function runEngine(db: DB, input: EngineInput, nowIso: string): Pro
     const accE = c.evidence.find((e) => paramDef(e.key)?.kind === 'ACCESSORY' && e.color === 'red'); const prodE = c.evidence.find((e) => paramDef(e.key)?.kind === 'PRODUCTION' && e.color === 'red');
     const symLabel = [...symptomKeys].map((k) => paramDef(k)?.label).filter(Boolean)[0];
     if (c.category === 'MIX_FIBRE') {
-      corrective.push({ id: `A${i}c`, text: `Quarantine the remaining stock of mix ${str(target.mix.mix_no)} and re-test the bales that raised the ${c.evidence.find((e) => e.stage !== 'BALE')?.label.toLowerCase() ?? 'fibre property'}; blend with a lower-short-fibre variety before further use.`, owner: 'Bale store + QA', priority: 'HIGH', relatedCauseId: c.id });
+      corrective.push({ id: `A${i}c`, text: `Quarantine the remaining stock of mix ${str(target.mix?.mix_no) || 'Unavailable'} and re-test the bales that raised the ${c.evidence.find((e) => e.stage !== 'BALE')?.label.toLowerCase() ?? 'fibre property'}; blend with a lower-short-fibre variety before further use.`, owner: 'Bale store + QA', priority: 'HIGH', relatedCauseId: c.id });
       preventive.push({ id: `A${i}p`, text: 'Add a pre-mix HVI check: hold bales whose short-fibre index or uniformity breach the Count & Mix master ranges before they are issued, and review the supplier lot.', owner: 'QA / Purchase', priority: 'MEDIUM', relatedCauseId: c.id });
     } else if (c.category === 'PACKING') {
       corrective.push({ id: `A${i}c`, text: 'Re-inspect the cartons of this lot against the Color Code and Accessories masters; replace mismatching cones and re-issue the packing slip.', owner: 'Packing in-charge', priority: 'HIGH', relatedCauseId: c.id });
@@ -339,17 +339,17 @@ export async function runEngine(db: DB, input: EngineInput, nowIso: string): Pro
 
   const flaggedCount = obs.filter(flagged).length;
   const lead = top[0];
-  const locOf = (c: AnalysisCause) => (c.machineId ? labelOf(c.machineId) : c.category === 'MIX_FIBRE' ? `mix ${str(target.mix.mix_no)}` : 'packing');
+  const locOf = (c: AnalysisCause) => (c.machineId ? labelOf(c.machineId) : c.category === 'MIX_FIBRE' ? `mix ${str(target.mix?.mix_no) || 'Unavailable'}` : 'packing');
   const verb = !lead ? '' : lead.confidence >= 75 ? 'traced to' : lead.confidence >= 50 ? 'most likely linked to' : 'weak lead only:';
   const headline = lead ? `${COMPLAINT_NAME[type]} ${verb} ${locOf(lead)} — ${lead.title.split(': ').slice(1).join(': ') || lead.title}${top[1] && top[1].confidence >= 40 ? `; contributory: ${locOf(top[1])}` : ''}${lead.confidence < 50 ? ' (low confidence — no conclusive cause in the data)' : ''}` : `No lens parameter is outside its master for lot ${str(target.lot.lot_no)}`;
   const ruledOut = lens.filter((l) => { const rows = obs.filter((o) => o.stage === l.stage && o.key === l.key); return rows.length > 0 && rows.every((o) => !flagged(o)); }).map((l) => `${paramDef(l.key)?.label} (${STAGE_INFO[l.stage].short}) is within master and in line with the reference lots`);
-  const mixRef = [...new Set(refs.map((r) => str(r.b.mix.mix_no)))];
+  const mixRef = [...new Set(refs.map((r) => str(r.b.mix?.mix_no) || 'Unavailable'))];
   const overall: QualityColor = worstColor(obs.map((o) => o.color));
   return {
     engineVersion: 'stat-2.1', generatedAt: nowIso, mode,
-    lot: { id: str(target.lot.id), lotNo: str(target.lot.lot_no), lotCode: str(target.lot.lot_code), countId, countDisplay: str(target.count.display), mixNo: str(target.mix.mix_no) },
+    lot: { id: str(target.lot.id), lotNo: str(target.lot.lot_no), lotCode: str(target.lot.lot_code), countId, countDisplay: str(target.count.display), mixNo: str(target.mix?.mix_no) || 'Unavailable' },
     complaint: complaint ? { id: str(complaint.id), complaintNo: str(complaint.complaint_no), type } : null,
-    lens, referenceLots: refs.map((r) => ({ lotId: str(r.b.lot.id), lotNo: str(r.b.lot.lot_no), mixNo: str(r.b.mix.mix_no), kind: (r.b.lot.mix_id === target.lot.mix_id ? 'GOOD' : 'PREVIOUS_MIX') as 'GOOD' | 'PREVIOUS_MIX', leadingScore: r1(r.score, 2) })),
+    lens, referenceLots: refs.map((r) => ({ lotId: str(r.b.lot.id), lotNo: str(r.b.lot.lot_no), mixNo: str(r.b.mix?.mix_no) || 'Unavailable', kind: (r.b.lot.mix_id === target.lot.mix_id ? 'GOOD' : 'PREVIOUS_MIX') as 'GOOD' | 'PREVIOUS_MIX', leadingScore: r1(r.score, 2) })),
     summary: { headline, overallColor: overall, topSuspect: lead ? lead.title : null, deviatingCount: flaggedCount, dataPoints: obs.reduce((s, o) => s + o.n, 0), referenceCount: refs.length },
     parameters: obs.sort((a, b) => sev(b) - sev(a) || a.stage.localeCompare(b.stage)), ruledOut, rootCauses: top.map(({ _suspect, ...c }) => { void _suspect; return c; }), correlations,
     recallScope: { lots: recallLots, customers: [...custMap.values()].map((cu) => ({ ...cu, kg: r1(cu.kg, 0) })), totalKgAtRisk: r1(atRisk, 0), basis: `${recallLots.filter((l) => l.risk !== 'LOW').length} other ${plural(recallLots.filter((l) => l.risk !== 'LOW').length, 'lot')} share the suspected machine window or mix with the complaint lot. Reference: ${refs.length} good ${plural(refs.length, 'lot')} of the same count from ${mixRef.length} ${plural(mixRef.length, 'mix', 'mixes')}.` },

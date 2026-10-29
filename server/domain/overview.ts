@@ -44,7 +44,7 @@ export async function backTrace(db: DB, key: string): Promise<BackTrace | null> 
     dispatch: last ? { id: str(last.id), dispatchNo: str(last.dispatch_no), dispatchedAt: str(last.dispatched_at), vehicleNo: str(last.vehicle_no), invoiceNo: str(last.invoice_no) } : null,
     packing: b.packing ? { id: str(b.packing.id), slipNo: str(b.packing.slip_no), cartons: num(b.packing.cartons), cartonFrom: str(b.packing.carton_from), cartonTo: str(b.packing.carton_to) } : null,
     stages: route.map((s) => { const rs = b.runs.filter((r) => r.stage === s); return { stage: s, label: STAGE_INFO[s].label, machines: rs.filter((r) => r.machine_id).map((r) => str(d.machines.get(str(r.machine_id))?.label)), batchRefs: rs.map((r) => str(r.batch_ref)).filter(Boolean), inAt: rs.length ? rs.map((r) => str(r.in_at)).sort()[0] : null, outAt: rs.length && rs.every((r) => r.out_at) ? rs.map((r) => str(r.out_at)).sort().pop() ?? null : null }; }).filter((s) => s.inAt),
-    mix: { id: str(b.mix.id), mixNo: str(b.mix.mix_no), countId: str(b.mix.count_id), recipe: parse<{ label: string; pct: number }[]>(b.mix.recipe, []).map((r) => ({ label: r.label, pct: r.pct })) },
+    mix: b.mix ? { id: str(b.mix.id), mixNo: str(b.mix.mix_no), countId: str(b.mix.count_id), recipe: parse<{ label: string; pct: number }[]>(b.mix.recipe, []).map((r) => ({ label: r.label, pct: r.pct })) } : { id: '', mixNo: 'Unavailable', countId: str(b.lot.count_id), recipe: [] },
     bales: bales.map((x) => traceBale(x, num(x.kg_used), num(x.pct))),
     suppliers: [...suppliers.values()].map((s) => ({ ...s, kg: r1(s.kg, 0) })),
   };
