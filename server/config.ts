@@ -42,6 +42,9 @@ export const config = {
     perMinute: num(process.env.ZEON_PER_MINUTE, 12),
     perDay: num(process.env.ZEON_PER_DAY, 300),
     timeoutMs: num(process.env.ZEON_TIMEOUT_MS, 30000),
+    /** Gemini text-to-speech model and voice for Zeon's spoken answers */
+    ttsModel: process.env.ZEON_TTS_MODEL ?? 'gemini-2.5-flash-preview-tts',
+    ttsVoice: process.env.ZEON_TTS_VOICE ?? 'Sulafat',
   },
   gemini: {
     apiKey: process.env.Gemini_API_KEY ?? '',
