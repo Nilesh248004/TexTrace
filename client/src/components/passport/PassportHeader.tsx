@@ -3,6 +3,7 @@ import { ClipboardList, FileDown, MapPin, Printer, Radar, ScrollText, ShieldAler
 import type { LotLocation, LotPassport } from '@shared/domain';
 import { COLOR_TEXT, ChainBadge, ColorIcon, ColorPill, J, Pill } from '../ui';
 import { fmtD, fmtDT, fmtDuration } from '../../lib/fmt';
+import { useCan } from '../masters/common';
 import { CountPills, KV, LOT_STATUS, fmtKg, fmtN } from './util';
 
 const SERIES = [1, 2, 3, 4, 5, 6, 7];
@@ -22,6 +23,7 @@ export function MixChips({ recipe }: { recipe: LotPassport['mix']['recipe'] }): 
 }
 
 export function PassportHeader({ p, canTrace, onExport, judgeLabel }: { p: LotPassport; canTrace: boolean; onExport: () => void; judgeLabel: string }): JSX.Element {
+  const reg = useCan('Quality.registerComplaint');
   const { lot, summary, ledger, packing, dispatch, mix } = p;
   const st = LOT_STATUS[lot.status] ?? { label: lot.status, tone: 'gray' as const };
   const real = summary.realization;
@@ -52,7 +54,7 @@ export function PassportHeader({ p, canTrace, onExport, judgeLabel }: { p: LotPa
           <button type="button" className="btn" onClick={onExport} data-testid="passport-pdf" title="Download a PDF summary: header, journey and key results"><FileDown size={14} /> Export PDF</button>
           <Link className="btn" to={`/live?lot=${lot.lotNo}`} title="See where this lot is right now"><Radar size={14} /> Track live</Link>
           {canTrace ? <Link className="btn" to={`/developer?lot=${lot.lotNo}`} data-testid="passport-trace" title="Open this lot's ledger history in the Developer Console"><ScrollText size={14} /> Trace this lot&apos;s ledger history</Link> : null}
-          <Link className="btn primary" to={`/complaints/new?lot=${lot.lotNo}&type=HAIRINESS`} data-testid="passport-complaint"><ClipboardList size={14} /> Report a complaint</Link>
+          {reg.can ? <Link className="btn primary" to={`/complaints/new?lot=${lot.lotNo}&type=HAIRINESS`} data-testid="passport-complaint"><ClipboardList size={14} /> Report a complaint</Link> : null}
         </div>
       </div>
 

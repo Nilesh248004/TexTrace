@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { Activity, BarChart3, Bell, ClipboardList, Factory, FlaskConical, Gauge, LogOut, Menu, Moon, PackageOpen, Radar, Search, Settings2, ShieldCheck, ScanSearch, Sun, Terminal, Truck, Users, Waves, FileText, Wrench, Boxes } from 'lucide-react';
+import { Activity, BarChart3, Bell, ClipboardList, Factory, FlaskConical, Gauge, LogOut, Menu, Moon, PackageOpen, Radar, Search, Settings2, ShieldCheck, ScanSearch, Sun, Terminal, Truck, Users, Waves, X, FileText, Wrench, Boxes } from 'lucide-react';
 import { request, useGet } from '../lib/api';
 import { useLive, useSession, useTraces, useUi } from '../lib/store';
 import { useLiveSocket } from '../lib/ws';
@@ -49,7 +49,7 @@ export function Shell(): JSX.Element {
   useEffect(() => { clearTimeout(timer.current); if (!q.trim()) { setHits([]); return; } timer.current = setTimeout(() => { request<SearchHit[]>('GET', `/api/search?q=${encodeURIComponent(q)}`).then((r) => setHits(r.data)).catch(() => setHits([])); }, 160); return () => clearTimeout(timer.current); }, [q]);
   const go = (h: SearchHit) => { setQ(''); setHits([]); nav(h.link); };
   const switchUser = async (username: string) => { const r = await request<{ token: string; user: never }>('POST', '/api/auth/login', { username }); set(r.data.token, r.data.user); nav(r.data.user && (r.data.user as { role: string }).role === 'BUYER' ? '/portal' : '/'); };
-  const traceNotes = useTraces((s) => s.notes); const dismiss = useTraces((s) => s.dismiss);
+  const traceNotes = useTraces((s) => s.notes); const dismiss = useTraces((s) => s.dismiss); const hold = useTraces((s) => s.hold); const release = useTraces((s) => s.release);
 
   return <div className="app">
     <aside className={`sidebar ${open ? 'open' : ''}`}>
@@ -79,11 +79,14 @@ export function Shell(): JSX.Element {
       </header>
       <Outlet />
     </div>
-    <div className="tracebar no-print" aria-live="polite">{traceNotes.map((n) => <div key={n.id} className={`tracecard ${n.trace.accepted ? '' : 'bad'}`} onClick={() => dismiss(n.id)} data-testid="trace-card">
-      <div className="row between"><b>{n.trace.accepted ? <><ShieldCheck size={13} style={{ verticalAlign: -2 }} /> Committed on the ledger</> : 'Rejected by the contract'}</b><span className="muted tiny">block #{n.trace.blockNumber}</span></div>
-      <div className="small">{n.label}</div>
-      {n.trace.accepted ? <div className="mono tiny muted">{n.trace.invocations.map((i) => `${i.contract}.${i.fn}`).join(' → ')} · tx {n.trace.txHashes[0]?.slice(0, 14)}… · {n.trace.validatorApprovals.filter((a) => a.approved).length}/4 validators</div> : <div className="small" style={{ color: 'hsl(var(--bad-foreground))' }}>{n.trace.reason}</div>}
-      {useUi.getState().dev || !n.trace.accepted ? <Link className="small" to={`/developer?action=${n.trace.actionId}`} onClick={(e) => e.stopPropagation()}>Open in Developer Console →</Link> : null}
+    <div className={`tracebar no-print${dev ? ' dev' : ''}`} aria-live="polite">{traceNotes.map((n) => <div key={n.id} role="status" className={`tracecard ${n.trace.accepted ? '' : 'bad'}`} onMouseEnter={() => hold(n.id)} onMouseLeave={() => release(n.id)} data-testid="trace-card">
+      <button type="button" className="tracecard-x" aria-label="Dismiss" onClick={() => dismiss(n.id)} data-testid="trace-dismiss"><X size={13} /></button>
+      <div className="tracecard-head"><b>{n.trace.accepted ? <><ShieldCheck size={13} style={{ verticalAlign: -2 }} /> Committed on the ledger</> : 'Rejected by the contract'}</b><span className="muted tiny">block #{n.trace.blockNumber}</span></div>
+      <div className="small tracecard-label">{n.label}</div>
+      <div className="tracecard-more">
+        {n.trace.accepted ? <div className="mono tiny muted">{n.trace.invocations.map((i) => `${i.contract}.${i.fn}`).join(' → ')} · tx {n.trace.txHashes[0]?.slice(0, 14)}… · {n.trace.validatorApprovals.filter((a) => a.approved).length}/4 validators</div> : <div className="small" style={{ color: 'hsl(var(--bad-foreground))' }}>{n.trace.reason}</div>}
+        {dev || !n.trace.accepted ? <Link className="small" to={`/developer?action=${n.trace.actionId}`}>Open in Developer Console →</Link> : null}
+      </div>
     </div>)}</div>
   </div>;
 }

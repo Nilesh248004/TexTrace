@@ -13,13 +13,21 @@ interface UiState { theme: 'light' | 'dark'; dev: boolean; count: string; judge:
 export const useUi = create<UiState>()(persist((set) => ({ theme: 'light', dev: false, count: 'ALL', judge: 'asOf', setTheme: (theme) => set({ theme }), setDev: (dev) => set({ dev }), setCount: (count) => set({ count }), setJudge: (judge) => set({ judge }) }), { name: 'textrace.ui' }));
 
 export interface TraceNote { id: number; label: string; trace: DevTrace }
-interface TraceState { notes: TraceNote[]; push: (label: string, trace: DevTrace) => void; dismiss: (id: number) => void }
+interface TraceState { notes: TraceNote[]; push: (label: string, trace: DevTrace) => void; dismiss: (id: number) => void; hold: (id: number) => void; release: (id: number) => void }
 let seq = 0;
-export const useTraces = create<TraceState>((set) => ({
-  notes: [],
-  push: (label, trace) => { const id = ++seq; set((s) => ({ notes: [...s.notes.slice(-2), { id, label, trace }] })); setTimeout(() => set((s) => ({ notes: s.notes.filter((n) => n.id !== id) })), 11000); },
-  dismiss: (id) => set((s) => ({ notes: s.notes.filter((n) => n.id !== id) })),
-}));
+const timers = new Map<number, ReturnType<typeof setTimeout>>();
+// A confirmation should not sit on top of the work: a few seconds normally, longer in Developer mode (the proof is the point) or when refused.
+const lifetime = (trace: DevTrace): number => (!trace.accepted ? 12_000 : useUi.getState().dev ? 11_000 : 5_000);
+export const useTraces = create<TraceState>((set, get) => {
+  const arm = (id: number, ms: number) => { clearTimeout(timers.get(id)); timers.set(id, setTimeout(() => get().dismiss(id), ms)); };
+  return {
+    notes: [],
+    push: (label, trace) => { const id = ++seq; set((s) => ({ notes: [...s.notes.slice(-1), { id, label, trace }] })); arm(id, lifetime(trace)); },
+    dismiss: (id) => { clearTimeout(timers.get(id)); timers.delete(id); set((s) => ({ notes: s.notes.filter((n) => n.id !== id) })); },
+    hold: (id) => clearTimeout(timers.get(id)), // pointer is over the card: keep it while it is being read
+    release: (id) => arm(id, 2_500),
+  };
+});
 
 interface LiveState { height: number | null; online: boolean; set: (p: Partial<Pick<LiveState, 'height' | 'online'>>) => void }
 export const useLive = create<LiveState>((set) => ({ height: null, online: false, set: (p) => set(p) }));
