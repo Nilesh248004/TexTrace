@@ -1,16 +1,18 @@
-// Zeon's sad face, shown after the panel is closed: it rolls its eyes, its brows drop, and it cries. After the first few seconds it
-// settles into a quietly sobbing loop (tears keep falling) instead of repeating the whole scene. Same technique as ZeonFace.
+// Zeon's sad faces. mode 'stare' (the page's first look): it keeps alternating between looking around wide-eyed and a flat, unimpressed stare, with no tears.
+// mode 'cry': only the loud cry: eyes squeezed shut, mouth wide open, tears streaming, bawling in a steady loop. Same technique as ZeonFace.
 import { useEffect, useId, useRef } from 'react';
-import { cl, kf, lerp } from './ZeonFace';
+import { kf, cl, ss } from './ZeonFace';
 
 const F = 3.6; const C0 = 3.05; const D = 0.42;
 const SETTLED = 4.97; // from here on every track is constant, so the loop below can repeat without a visible jump
+// the stare loops between two moments of the sequence: eyes wide open and looking ahead (LOOK_AT), and eyes rolled with the brows settled into a flat stare (STARE_AT)
+const LOOK_AT = 0.55; const STARE_AT = 1.92; const STARE_PERIOD = 3.6;
+const stareTime = (clock: number): number => { const ph = (clock % STARE_PERIOD) / STARE_PERIOD; const tri = ph < 0.5 ? ph * 2 : 2 - ph * 2; return LOOK_AT + (STARE_AT - LOOK_AT) * ss(cl((tri - 0.15) / 0.7)); };
 const LOOP = 6 / F; // six sobs; also exactly three tear drops' worth of travel
-const SPEED = 1.4;
 
 type Els = Record<string, HTMLElement | SVGElement>;
 
-function draw(els: Els, T0: number, clock: number): void {
+function draw(els: Els, T0: number, clock: number, loud?: number): void {
   const $ = (k: string) => els[k] as SVGElement & HTMLElement;
   const t = T0 - D;
   const brow = (el: SVGElement, x: number, y: number, rot: number, arch: number) => { el.setAttribute('d', `M-8 0 Q0 ${-arch} 8 0`); el.setAttribute('transform', `translate(${x} ${y}) rotate(${rot})`); };
@@ -39,7 +41,7 @@ function draw(els: Els, T0: number, clock: number): void {
   brow($('bR') as SVGElement, 80 - sad * 1.5, kf(t, [[-9, 44], [0.12, 44], [0.35, 41], [1.0, 41], [1.3, 34], [2.45, 34], [2.8, 41]]), kf(t, [[-9, 0], [0.35, -4], [1.3, -9], [2.45, -9], [2.8, 30]]), kf(t, [[-9, 1.5], [0.35, 2], [1.3, 5.5], [2.45, 5.5], [2.8, 0.8]]));
 
   const cv = cl((lidL - 0.94) / 0.05);
-  const amp = kf(t, [[-9, 0], [C0, 0], [C0 + 0.3, 1], [4.2, 1], [4.55, 0.25]]);
+  const amp = loud !== undefined ? loud : kf(t, [[-9, 0], [C0, 0], [C0 + 0.3, 1], [4.2, 1], [4.55, 0.25]]); // loud: bawling at full strength
   const pulse = 0.5 + 0.5 * Math.sin(2 * Math.PI * F * (t - C0) - Math.PI / 2);
   const j = amp * pulse * 0.95;
   $('cvL').setAttribute('d', `M38 ${54 + j} L49 ${61 + j} L38 ${68 + j}`); $('cvR').setAttribute('d', `M86 ${54 + j} L75 ${61 + j} L86 ${68 + j}`);
@@ -92,21 +94,23 @@ const Drop = ({ k }: { k: string }) => <g data-k={k} opacity="0">
   <path d="M0 -6 Q4.2 0 4.2 2.6 A4.2 4.2 0 1 1 -4.2 2.6 Q-4.2 0 0 -6Z" fill="#d6e9ff" stroke="#8fb8ff" strokeWidth="1" /><circle cx="-1.4" cy="2" r="1.2" fill="#fff" />
 </g>;
 
-export function ZeonCry({ size = 120 }: { size?: number }) {
+export function ZeonCry({ size = 120, mode = 'cry' }: { size?: number; mode?: 'stare' | 'cry' }) {
   const uid = useId().replace(/[^a-zA-Z0-9]/g, '');
   const root = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const host = root.current; if (!host) return;
     const els: Els = {}; host.querySelectorAll<HTMLElement>('[data-k]').forEach((e) => { els[e.dataset.k as string] = e; });
-    if (typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches) { draw(els, 3.9, 0); return; }
+    const stare = mode === 'stare';
+    if (typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches) { draw(els, stare ? STARE_AT : SETTLED, 0, stare ? 0 : 1); return; }
     let raf = 0; let start = 0;
     const frame = (now: number) => {
-      start ||= now; const clock = (now - start) / 1000; const played = clock * SPEED;
-      draw(els, played < SETTLED ? played : SETTLED + ((played - SETTLED) % LOOP), clock);
+      start ||= now; const clock = (now - start) / 1000;
+      if (stare) draw(els, stareTime(clock), clock, 0); // look, stare, look, stare: keeps going
+      else draw(els, SETTLED + (clock % LOOP), clock, 1);
       raf = requestAnimationFrame(frame);
     };
-    draw(els, 0, 0); raf = requestAnimationFrame(frame);
+    draw(els, stare ? stareTime(0) : SETTLED, 0, stare ? 0 : 1); raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
   }, []);
 

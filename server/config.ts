@@ -42,9 +42,9 @@ export const config = {
     perMinute: num(process.env.ZEON_PER_MINUTE, 12),
     perDay: num(process.env.ZEON_PER_DAY, 300),
     timeoutMs: num(process.env.ZEON_TIMEOUT_MS, 30000),
-    /** Zeon's chat model: a fast free-tier one (the PDF import keeps GEMINI_MODEL). Falls back to the lighter model if this one is busy. */
-    model: process.env.ZEON_MODEL ?? 'gemini-2.5-flash',
-    fallbackModels: (process.env.ZEON_FALLBACK_MODELS ?? 'gemini-2.5-flash-lite').split(',').map((m) => m.trim()).filter(Boolean),
+    /** Zeon's chat model (the PDF import keeps GEMINI_MODEL). Falls back to the lighter models, in order, if this one is busy. */
+    model: process.env.ZEON_MODEL ?? 'gemini-3.8-flash',
+    fallbackModels: (process.env.ZEON_FALLBACK_MODELS ?? 'gemini-2.5-flash,gemini-2.5-flash-lite').split(',').map((m) => m.trim()).filter(Boolean),
     /** Gemini text-to-speech model and voice for Zeon's spoken answers */
     ttsModel: process.env.ZEON_TTS_MODEL ?? 'gemini-2.5-flash-preview-tts',
     ttsVoice: process.env.ZEON_TTS_VOICE ?? 'Sulafat',
