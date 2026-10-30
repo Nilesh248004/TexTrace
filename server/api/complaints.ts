@@ -686,7 +686,8 @@ ${String(source.extracted_text).slice(0, 180000)}`;
           bay: str(row.bay),
           bin: str(row.bin),
           fibre: fibre as Record<string, number>,
-          receivedAt: str(row.receivedAt) || undefined,
+          receivedAt: str(row.receivedAt) || str(row.arrivalDate) || undefined,
+          arrivalDate: str(row.arrivalDate) || str(row.receivedAt) || undefined,
         }));
 
         if (!action.ok) {
