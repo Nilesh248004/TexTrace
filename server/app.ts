@@ -17,6 +17,7 @@ import { portalRouter } from './api/portal';
 import { devRouter } from './api/dev';
 import { buildPassport } from './domain/lots';
 import { forwardTrace } from './domain/overview';
+import { demoContext } from './domain/demoContext';
 
 type Row = Record<string, unknown>;
 const userOf = (row: Row): AuthedUser => ({ id: String(row.id), username: String(row.username), name: String(row.name), role: row.role as AuthedUser['role'], org: String(row.org), customerId: (row.customer_id as string) ?? null });
@@ -31,9 +32,9 @@ export function createApp(db: DB, ledger: LedgerService, runtime: ContractRuntim
   app.use(express.json({ limit: '2mb' }));
   const c: ApiCtx = { db, ledger, runtime };
 
-  app.get('/api/health', async (_req, res) => ok(res, { millName: config.millName, ledger: await ledger.stats(), now: nowIso() }));
+  app.get('/api/health', async (_req, res) => ok(res, { millName: (await getSettings(db)).millName, ledger: await ledger.stats(), now: nowIso() }));
   app.get('/api/meta', async (_req, res) => ok(res, {
-    millName: config.millName, now: nowIso(), businessDate: (await getSettings(db)).businessDate,
+    millName: (await getSettings(db)).millName, now: nowIso(), businessDate: (await getSettings(db)).businessDate,
     counts: await db.prepare('SELECT id,label,display,ne,uses_comber AS usesComber FROM counts ORDER BY ne,id').all(),
     stages: STAGES.map((s) => STAGE_INFO[s]), params: PARAMS, masterLabels: MASTER_LABEL, masterPlain: MASTER_PLAIN, complaintTypes: COMPLAINT_TYPES.map((t) => ({ key: t, label: COMPLAINT_TYPE_LABEL[t] })),
     roles: Object.entries(ROLE_LABEL).map(([role, label]) => ({ role, label })), ai: { llmEnabled: config.ai.enabled, provider: config.ai.enabled ? config.ai.provider : null, model: config.ai.enabled ? config.ai.model : null },
@@ -41,6 +42,8 @@ export function createApp(db: DB, ledger: LedgerService, runtime: ContractRuntim
   }));
   // the public login screen lists the demo accounts
   app.get('/api/auth/demo-users', async (_req, res) => ok(res, (await db.prepare('SELECT username,name,role,title,customer_id AS customerId FROM users WHERE username NOT LIKE \'op%\' AND username NOT LIKE \'lab%\' AND username NOT LIKE \'pack%\' ORDER BY CASE role WHEN \'BUYER\' THEN 2 ELSE 1 END, name').all<Row>()).map((u) => ({ ...u, roleLabel: ROLE_LABEL[u.role as keyof typeof ROLE_LABEL], org: ROLE_ORG[u.role as keyof typeof ROLE_ORG] }))));
+  // …and describes the mill and its featured lot, all read from the database
+  app.get('/api/auth/demo-context', async (_req, res) => ok(res, await demoContext(db)));
 
   app.post('/api/auth/login', async (req, res) => {
     const username = String(req.body?.username ?? '').trim().toLowerCase();

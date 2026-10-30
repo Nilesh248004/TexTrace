@@ -16,7 +16,7 @@ export default function Masters(): JSX.Element {
   const globalCount = useUi((s) => s.count);
   const q = useGet<MastersOverview>('/api/masters/overview');
   const [tab, setTab] = useState<Tab>((['counts', 'color', 'lens'] as const).find((t) => t === sp.get('tab')) ?? 'counts');
-  const [sel, setSel] = useState<string>(sp.get('count') ?? (globalCount !== 'ALL' ? globalCount : '40CH'));
+  const [sel, setSel] = useState<string>(sp.get('count') ?? (globalCount !== 'ALL' ? globalCount : ''));
   // the count filter in the top bar drives this page as well
   useEffect(() => { if (globalCount !== 'ALL') setSel(globalCount); }, [globalCount]);
   const choose = (t: Tab) => { setTab(t); const n = new URLSearchParams(sp); n.set('tab', t); setSp(n, { replace: true }); };

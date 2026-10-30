@@ -31,6 +31,8 @@ export interface Settings {
   warnFraction: number;
   businessDate: string; // YYYY-MM-DD demo "today"
   nowIso: string; // demo clock at seed time
+  demoLot?: string; // lot id featured on the sign-in screen
+  loginQuote?: string; // the customer sentence shown in the sign-in headline
 }
 
 // ============================================================================================

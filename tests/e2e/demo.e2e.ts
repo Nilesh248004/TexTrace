@@ -26,7 +26,7 @@ try {
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) errors.push(m.text()); });
   const shot = async (name: string, full = false) => { await page.waitForTimeout(500); await page.screenshot({ path: path.join(shots, `${name}.png`), fullPage: full }); console.log(`  📸 ${name}.png`); };
-  const signIn = async (user: string) => { await page.goto(base); await page.evaluate(() => localStorage.removeItem('textrace.session')); await page.goto(base); await page.getByTestId(`login-user-${user}`).click(); await page.waitForTimeout(800); };
+  const signIn = async (user: string) => { await page.goto(base); await page.evaluate(() => localStorage.removeItem('textrace.session')); await page.goto(base); await page.getByTestId(`login-user-${user}`).click(); await page.getByTestId('login-submit').click(); await page.waitForTimeout(800); };
 
   console.log('1. QA head types 101 → Lot Passport');
   await signIn('qa');

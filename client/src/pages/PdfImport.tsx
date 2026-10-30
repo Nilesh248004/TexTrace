@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { AlertCircle, CheckCircle2, FileText, Loader2, RefreshCw, Upload } from 'lucide-react';
 import { Card, CardBody, PageHead } from '../components/ui';
 import { useSession } from '../lib/store';
+import { fmtDT } from '../lib/fmt';
 
 type PdfValidation = {
   errors: string[];
@@ -464,10 +465,10 @@ export default function PdfImport(): JSX.Element {
           <div className="stack" style={{ gap: 8, marginTop: 12 }}>
             {jobs.map((job) => <div key={job.id} className="row between" style={{ gap: 12, padding: '10px 0', borderTop: '1px solid hsl(var(--border))' }}>
               <div style={{ minWidth: 0 }}>
-                <b>{job.fileName}</b>
-                <div className="muted small">{job.pages} page(s) · {job.uploadedAt} · {job.status}</div>
+                <div className="row" style={{ gap: 10 }}><FileText size={15} aria-hidden="true" /><b>{job.fileName}</b><span className={`pill ${job.status === 'REVIEWED' ? 'green' : 'blue'}`}>{job.status === 'REVIEWED' ? 'Reviewed' : 'Preview'}</span></div>
+                <div className="muted small" style={{ marginTop: 2 }}>{job.pages} page{job.pages === 1 ? '' : 's'} · uploaded {fmtDT(job.uploadedAt)}</div>
               </div>
-              <button className="btn ghost" type="button" onClick={() => void openJob(job.id)}>Open</button>
+              <button className="btn" type="button" onClick={() => void openJob(job.id)}>Open</button>
             </div>)}
           </div>}
       </CardBody>
