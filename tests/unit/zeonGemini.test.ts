@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import type { GenerateContentResponse } from '@google/genai';
 import { config } from '../../server/config';
-import { friendlyError, geminiModel, readReply, thinkingLevelFor, toGeminiContents, toGeminiTools, type GenAiLike } from '../../server/zeon/gemini';
+import { friendlyError, geminiModel, readReply, thinkingFor, thinkingLevelFor, toGeminiContents, toGeminiTools, type GenAiLike } from '../../server/zeon/gemini';
 import type { ModelRequest } from '../../server/zeon/model';
 
 const res = (r: unknown) => r as GenerateContentResponse;
@@ -44,6 +44,10 @@ describe('Zeon on Gemini', () => {
     expect(readReply(res({ candidates: [] })).outcome).toBe('empty');
   });
 
+  it('uses a thinking budget on 2.5 models and a level on newer ones', () => {
+    expect(thinkingFor('gemini-2.5-flash', 'low')).toEqual({ thinkingBudget: 256 }); expect(thinkingFor('gemini-2.5-flash-lite', 'low')).toEqual({ thinkingBudget: 0 }); expect(thinkingFor('gemini-3.8-flash', 'low')).toEqual({ thinkingLevel: 'LOW' });
+  });
+
   it('maps effort to a thinking level', () => { expect(thinkingLevelFor('low')).toBe('LOW'); expect(thinkingLevelFor('max')).toBe('HIGH'); expect(thinkingLevelFor('weird')).toBe('LOW'); });
 
   describe('the call', () => {
@@ -53,13 +57,13 @@ describe('Zeon on Gemini', () => {
     it('sends the system prompt, tools, thinking level and output limit', async () => {
       const { client, calls } = fake(ok);
       expect((await geminiModel(client)(request())).text).toBe('fine');
-      expect(calls[0]).toMatchObject({ model: config.gemini.model, config: { systemInstruction: 'SYS', thinkingConfig: { thinkingLevel: thinkingLevelFor(config.zeon.effort) } } });
+      expect(calls[0]).toMatchObject({ model: config.zeon.model, config: { systemInstruction: 'SYS', thinkingConfig: thinkingFor(config.zeon.model, config.zeon.effort) } });
       expect(JSON.stringify(calls[0])).not.toContain(config.gemini.apiKey || 'no-key-set');
     });
 
     it('falls back to another model when the first is overloaded, but not once tools have run', async () => {
       const a = fake(apiError(503), ok);
-      expect((await geminiModel(a.client)(request())).text).toBe('fine'); expect(a.calls.map((c) => c.model)).toEqual([config.gemini.model, config.gemini.fallbackModels[0]]);
+      expect((await geminiModel(a.client)(request())).text).toBe('fine'); expect(a.calls.map((c) => c.model)).toEqual([config.zeon.model, config.zeon.fallbackModels[0]]);
       const b = fake(apiError(503), ok);
       await expect(geminiModel(b.client)(request([{ role: 'user', text: 'q' }, { role: 'model', text: '', raw: {} }, { role: 'tool', results: [] }]))).rejects.toThrow(); expect(b.calls).toHaveLength(1);
     });

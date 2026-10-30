@@ -8,7 +8,9 @@ import { ROLE_LABEL } from '@shared/permissions';
 import type { ZeonAction, ZeonChatResponse, ZeonMessage } from '@shared/zeon';
 import { ApiError, request } from '../../lib/api';
 import { useSession, useTraces } from '../../lib/store';
-import { blocks, inline, plainForSpeech, suggestionsFor } from '../../lib/zeonUi';
+import { blocks, inline, plainForSpeech, speechChunks, suggestionsFor } from '../../lib/zeonUi';
+import { ZeonCry } from './ZeonCry';
+import { ZeonFace } from './ZeonFace';
 import './zeon.css';
 
 interface Msg { id: number; role: 'user' | 'assistant'; text: string; actions?: ZeonAction[]; error?: boolean }
@@ -17,6 +19,7 @@ type RecognitionCtor = new () => RecognitionLike;
 
 const recognitionCtor = (): RecognitionCtor | null => (typeof window === 'undefined' ? null : ((window as unknown as { SpeechRecognition?: RecognitionCtor; webkitSpeechRecognition?: RecognitionCtor }).SpeechRecognition ?? (window as unknown as { webkitSpeechRecognition?: RecognitionCtor }).webkitSpeechRecognition ?? null));
 const canSpeak = (): boolean => typeof window !== 'undefined' && 'speechSynthesis' in window && typeof SpeechSynthesisUtterance !== 'undefined';
+const SPEECH_SPEED = 1.1; // how fast Zeon talks (1 = normal)
 const canVoice = (): boolean => typeof window !== 'undefined' && (typeof Audio !== 'undefined' || canSpeak());
 
 /** The most natural-sounding English voice this browser has (the built-in fallback; the server's Gemini voice is used first). */
@@ -56,6 +59,8 @@ export default function Zeon(): JSX.Element | null {
   const [voiceNote, setVoiceNote] = useState('');
   const [speak, setSpeak] = useState<boolean>(() => read('zeon.speak', false));
   const [burst, setBurst] = useState(0);
+  // the icon's mood: crying by default (and again whenever Zeon is closed); smiling while the pointer is over it or while Zeon is open
+  const [hover, setHover] = useState(false);
   const tiltRef = useRef<HTMLSpanElement | null>(null);
   const [nudge, setNudge] = useState('');
   const [handled, setHandled] = useState<Record<string, 'done' | 'skipped'>>({});
@@ -109,20 +114,29 @@ export default function Zeon(): JSX.Element | null {
     const token = voice.current.token; const words = plainForSpeech(text);
     const fallback = () => {
       if (!canSpeak() || voice.current.token !== token || !openRef.current) return;
-      const u = new SpeechSynthesisUtterance(words); u.lang = 'en-IN'; u.rate = 0.97; u.pitch = 1.03;
+      const u = new SpeechSynthesisUtterance(words); u.lang = 'en-IN'; u.rate = SPEECH_SPEED; u.pitch = 1.03;
       const v = bestVoice(); if (v) { u.voice = v; u.lang = v.lang; }
       window.speechSynthesis.speak(u);
     };
+    // every piece is requested at once; the first is short, so it comes back fast and starts playing while the others are still being made
+    const pieces = speechChunks(words);
+    const fetched = pieces.map((piece) => request<{ configured: boolean; mime?: string; audio?: string }>('POST', '/api/zeon/speak', { text: piece }).then((r) => r.data, () => null));
+    let started = false;
     try {
-      const { data } = await request<{ configured: boolean; mime?: string; audio?: string }>('POST', '/api/zeon/speak', { text: words });
-      if (voice.current.token !== token || !openRef.current) return; // closed, muted or replaced while the voice was being made
-      if (!data.configured || !data.audio || typeof Audio === 'undefined') return fallback();
-      const bytes = Uint8Array.from(atob(data.audio), (c) => c.charCodeAt(0));
-      const url = URL.createObjectURL(new Blob([bytes], { type: data.mime ?? 'audio/wav' }));
-      const audio = new Audio(url); voice.current.audio = audio; voice.current.url = url;
-      audio.onended = () => { if (voice.current.audio === audio) { URL.revokeObjectURL(url); voice.current.audio = null; voice.current.url = null; } };
-      await audio.play();
-    } catch { fallback(); }
+      for (const [i, pending] of fetched.entries()) {
+        const data = await pending;
+        if (voice.current.token !== token || !openRef.current) return; // closed, muted or replaced while the voice was being made
+        if (!data?.configured || !data.audio || typeof Audio === 'undefined') { if (i === 0) return fallback(); return; }
+        const bytes = Uint8Array.from(atob(data.audio), (c) => c.charCodeAt(0));
+        const url = URL.createObjectURL(new Blob([bytes], { type: data.mime ?? 'audio/wav' }));
+        const audio = new Audio(url); audio.playbackRate = SPEECH_SPEED; audio.preservesPitch = true;
+        if (voice.current.url) URL.revokeObjectURL(voice.current.url);
+        voice.current.audio = audio; voice.current.url = url;
+        started = true;
+        await new Promise<void>((done, fail) => { audio.onended = () => done(); audio.onerror = () => fail(new Error('audio')); audio.play().catch(fail); });
+        if (voice.current.token !== token) return;
+      }
+    } catch { if (voice.current.token === token && !started) fallback(); }
   }, [speak]);
 
   const send = useCallback(async (raw?: string) => {
@@ -220,15 +234,13 @@ export default function Zeon(): JSX.Element | null {
     </section> : null}
     {nudge && !open ? <button type="button" className="zeon-nudge" onClick={openFromNudge} data-testid="zeon-nudge">{nudge}</button> : null}
     <button type="button" className={`zeon-fab${busy ? ' thinking' : ''}${listening ? ' listening' : ''}${nudge && !open ? ' alert' : ''}`} aria-label="Ask Zeon" aria-expanded={open} title="Ask Zeon" data-testid="zeon-fab"
-      onClick={toggle} onPointerMove={tilt} onPointerLeave={untilt}>
+      onClick={toggle} onPointerMove={tilt} onPointerLeave={() => { untilt(); setHover(false); }} onPointerEnter={() => setHover(true)}>
       <span className="zeon-aura" /><span className="zeon-ring" /><span className="zeon-ring r2" />
       <span className="zeon-orbit"><i className="zeon-spark s1" /><i className="zeon-spark s2" /><i className="zeon-spark s3" /></span>
       <span className="zeon-orbit rev"><i className="zeon-spark s1" /><i className="zeon-spark s2" /></span>
       <span className="zeon-shadow" />
-      <span className="zeon-float"><span className="zeon-tilt" ref={tiltRef}><span className="zeon-orb" aria-hidden="true">
-        <span className="zeon-gloss" /><span className="zeon-bounce" />
-        {open ? <X size={26} className="zeon-x" /> : <svg className="zeon-bolt" viewBox="0 0 24 24" fill="none"><defs><linearGradient id="zeonBoltFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#ffffff" /><stop offset="1" stopColor="#cfe0ff" /></linearGradient></defs><path d="M13.2 2.6 4.6 13.4c-.4.5 0 1.2.6 1.2h5.2l-1 6.2c-.1.8.9 1.2 1.4.6l8.6-10.9c.4-.5 0-1.2-.6-1.2h-5.1l1-6.1c.1-.8-.9-1.2-1.5-.6Z" fill="url(#zeonBoltFill)" stroke="#fff" strokeWidth=".6" strokeLinejoin="round" /></svg>}
-      </span></span></span>
+      <span className="zeon-float"><span className="zeon-tilt" ref={tiltRef}><span className="zeon-mood" aria-hidden="true">{hover || open ? <ZeonFace key="happy" size={104} play /> : <ZeonCry key="sad" size={104} />}</span>
+      </span></span>
       {burst ? Array.from({ length: 10 }, (_, i) => { const a = (Math.PI * 2 * i) / 10 + (i % 3) * 0.13; const d = 55 + (i % 4) * 8; return <i key={i} className="zeon-burst" style={{ '--tx': `${Math.cos(a) * d}px`, '--ty': `${Math.sin(a) * d}px` } as React.CSSProperties} />; }) : null}
     </button>
   </div>;

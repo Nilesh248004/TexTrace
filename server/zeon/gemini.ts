@@ -9,6 +9,10 @@ export interface GenAiLike { models: { generateContent: (params: Record<string, 
 
 const THINKING: Record<string, 'LOW' | 'MEDIUM' | 'HIGH'> = { low: 'LOW', medium: 'MEDIUM', high: 'HIGH', xhigh: 'HIGH', max: 'HIGH' };
 export const thinkingLevelFor = (effort: string): 'LOW' | 'MEDIUM' | 'HIGH' => THINKING[effort] ?? 'LOW';
+/** Gemini 2.5 models take a thinking budget (tokens); Gemini 3 models take a named level. Looking things up needs little thinking, which keeps answers quick. */
+const BUDGET: Record<string, number> = { low: 256, medium: 1024, high: 4096 };
+export const thinkingFor = (model: string, effort: string): Record<string, unknown> =>
+  /gemini-2\.5/.test(model) ? { thinkingBudget: /lite/.test(model) ? 0 : (BUDGET[effort] ?? 256) } : { thinkingLevel: thinkingLevelFor(effort) };
 const MAX_OUTPUT_TOKENS = 2048;
 const BLOCKED = new Set(['SAFETY', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'SPII', 'RECITATION', 'IMAGE_SAFETY']);
 
@@ -63,7 +67,7 @@ export function geminiModel(client: GenAiLike = new GoogleGenAI({ apiKey: config
   return async (req: ModelRequest): Promise<ModelReply> => {
     const midLoop = req.turns.some((t) => t.role === 'tool');
     // a different model cannot be trusted to accept another model's thought signatures, so we only fall back before any tool has run
-    const models = midLoop ? [config.gemini.model] : [...new Set([config.gemini.model, ...config.gemini.fallbackModels])];
+    const models = midLoop ? [config.zeon.model] : [...new Set([config.zeon.model, ...config.zeon.fallbackModels])];
     let thinking = true;
     let lastError: unknown;
     for (const [i, model] of models.entries()) {
@@ -76,7 +80,7 @@ export function geminiModel(client: GenAiLike = new GoogleGenAI({ apiKey: config
               systemInstruction: req.system,
               tools: toGeminiTools(req.tools),
               maxOutputTokens: MAX_OUTPUT_TOKENS,
-              ...(thinking ? { thinkingConfig: { thinkingLevel: thinkingLevelFor(config.zeon.effort) } } : {}),
+              ...(thinking ? { thinkingConfig: thinkingFor(model, config.zeon.effort) } : {}),
             },
           });
           return readReply(response);

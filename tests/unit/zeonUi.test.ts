@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { blocks, complaintFromRoute, inline, lotFromRoute, plainForSpeech, suggestionsFor } from '../../client/src/lib/zeonUi';
+import { blocks, complaintFromRoute, inline, lotFromRoute, plainForSpeech, speechChunks, suggestionsFor } from '../../client/src/lib/zeonUi';
 
 describe('Zeon interface helpers', () => {
   it('reads the lot and complaint on screen from staff and portal URLs', () => {
@@ -27,5 +27,13 @@ describe('Zeon interface helpers', () => {
     expect(blocks('Intro **x**\n\n- a\n- b\n\nLast line\nsecond line')).toEqual([{ kind: 'p', lines: ['Intro **x**'] }, { kind: 'ul', items: ['a', 'b'] }, { kind: 'p', lines: ['Last line', 'second line'] }]);
     expect(inline('a **b** c')).toEqual(['a ', { bold: 'b' }, ' c']);
     expect(blocks('<img src=x onerror=alert(1)>')).toEqual([{ kind: 'p', lines: ['<img src=x onerror=alert(1)>'] }]); // stays plain text: React escapes it on render
+  });
+
+  it('splits speech so the first piece is short and starts quickly', () => {
+    const long = 'Lot 101 is a 40s CH lot. It was made on line 3 last week. Two readings were near the limit, so QA checked them again. Everything else looked normal, and the lot was dispatched to PD Textiles on Monday.';
+    const parts = speechChunks(long);
+    expect(parts[0].length).toBeLessThanOrEqual(110); expect(parts.length).toBeGreaterThan(1); expect(parts.join(' ')).toBe(long);
+    expect(speechChunks('Hello there.')).toEqual(['Hello there.']); expect(speechChunks('')).toEqual([]);
+    expect(speechChunks('No punctuation at all')).toEqual(['No punctuation at all']);
   });
 });
