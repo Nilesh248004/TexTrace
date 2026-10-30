@@ -10,6 +10,12 @@ export const COUNTS: CountSpec[] = [
   { id: '30CH', label: '30s Carded Hosiery', display: '30s CH', ne: 30, comber: false, compact: false },
   { id: '40CH', label: '40s Carded Hosiery', display: '40s CH', ne: 40, comber: false, compact: false },
   { id: '40CP', label: '40s Compact (combed)', display: '40s compact', ne: 40, comber: true, compact: true },
+  { id: '16S', label: '16s Carded Open-end Blend', display: '16s', ne: 16, comber: false, compact: false },
+  { id: '24CH', label: '24s Carded Hosiery', display: '24s CH', ne: 24, comber: false, compact: false },
+  { id: '34CH', label: '34s Carded Hosiery', display: '34s CH', ne: 34, comber: false, compact: false },
+  { id: '30CP', label: '30s Compact (combed)', display: '30s compact', ne: 30, comber: true, compact: true },
+  { id: '50CP', label: '50s Compact (combed)', display: '50s compact', ne: 50, comber: true, compact: true },
+  { id: '60CP', label: '60s Compact (combed)', display: '60s compact', ne: 60, comber: true, compact: true },
 ];
 
 export interface SpecItem { master: MasterType; scope: Scope; key: string; std: number; lower: number | null; upper: number | null; unit?: string; frequency: string; instrument: string }
@@ -189,7 +195,7 @@ export function countMixMeta(c: CountSpec): CountMixMeta {
   };
   const realization = c.compact ? 72.5 : 86.5;
   return {
-    route: routeFor(c.comber), usesComber: c.comber, recipe: recipes[c.id],
+    route: routeFor(c.comber), usesComber: c.comber, recipe: recipes[c.id] ?? recipes[c.comber ? '40CP' : c.ne >= 30 ? '30CH' : '20S'],
     targetWastePct: r(100 - realization, 1), targetRealizationPct: realization,
     notes: c.comber ? 'Combed + compact-spun; comber noil is re-blended at 10%.' : 'Carded hosiery yarn; recycled waste re-blended within the recipe band.',
   };
@@ -208,4 +214,10 @@ export const COLOR_OF: Record<string, ColorMeta> = {
   '30CH': { colorName: 'Blue', hex: '#2563eb', tip: 'Blue tip cone', code: 'BL-30' },
   '40CH': { colorName: 'Green', hex: '#16a34a', tip: 'Green tip cone', code: 'GR-40' },
   '40CP': { colorName: 'Violet', hex: '#7c3aed', tip: 'Violet tip cone (compact)', code: 'VI-40C' },
+  '16S': { colorName: 'Red', hex: '#dc2626', tip: 'Red tip cone', code: 'RD-16' },
+  '24CH': { colorName: 'Yellow', hex: '#eab308', tip: 'Yellow tip cone', code: 'YL-24' },
+  '34CH': { colorName: 'Teal', hex: '#0d9488', tip: 'Teal tip cone', code: 'TL-34' },
+  '30CP': { colorName: 'Pink', hex: '#db2777', tip: 'Pink tip cone (compact)', code: 'PK-30C' },
+  '50CP': { colorName: 'Brown', hex: '#92400e', tip: 'Brown tip cone (compact)', code: 'BR-50C' },
+  '60CP': { colorName: 'Grey', hex: '#6b7280', tip: 'Grey tip cone (compact)', code: 'GY-60C' },
 };

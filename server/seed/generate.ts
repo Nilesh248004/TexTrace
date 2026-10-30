@@ -32,8 +32,13 @@ export interface SeedRow {
   payload?: Record<string, unknown>;
 }
 export interface SeedFile { path: string; content: string }
+/** A contract call that was refused: recorded on the ledger as an INVALID tx (no entities anchored) and in the audit log with its reason. */
+export interface SeedRejection { at: string; actor: string; contract: string; fn: string; label: string; method: string; path: string; payload: Record<string, unknown>; rule: string; message: string; status: number }
+export interface SeedPdfImport { job: Record<string, unknown>; extraction: Record<string, unknown> | null }
 export interface Plan {
   notifications: Record<string, unknown>[];
+  rejections: SeedRejection[];
+  pdfImports: SeedPdfImport[];
   users: Record<string, unknown>[];
   counts: Record<string, unknown>[];
   orders: Record<string, unknown>[];
@@ -88,6 +93,11 @@ export function generatePlan(seed = 20261028): Plan {
     ['U-SLH', 'slh', 'L. Lakshmi', 'BUYER', 'BuyerOrg', 'Lab Head, Sri Lakshmi Hosiery', 'CUST-SLH'],
     ['U-KVW', 'kvw', 'K. Murali', 'BUYER', 'BuyerOrg', 'QA, Kaveri Weaves', 'CUST-KVW'],
     ['U-GGT', 'ggt', 'P. Gangadharan', 'BUYER', 'BuyerOrg', 'Purchase, Ganga Garments', 'CUST-GGT'],
+    ['U-AKT', 'akt', 'A. Arulraj', 'BUYER', 'BuyerOrg', 'QA, Arul Knitwear', 'CUST-AKT'],
+    ['U-SMT', 'smt', 'M. Murugan', 'BUYER', 'BuyerOrg', 'Lab Head, Sri Murugan Textiles', 'CUST-SMT'],
+    ['U-BHT', 'bht', 'R. Bharathi', 'BUYER', 'BuyerOrg', 'QA, Bharathi Hosiery Mills', 'CUST-BHT'],
+    ['U-NLF', 'nlf', 'S. Nilavan', 'BUYER', 'BuyerOrg', 'Purchase, Nila Fabrics', 'CUST-NLF'],
+    ['U-RKS', 'rks', 'N. Ramkumar', 'BUYER', 'BuyerOrg', 'QA, Ramkumar Spinners & Knitters', 'CUST-RKS'],
     ...[['U-OP1', 'op1', 'K. Selvam'], ['U-OP2', 'op2', 'P. Arun'], ['U-OP3', 'op3', 'S. Dinesh'], ['U-OP4', 'op4', 'R. Mohan'], ['U-OP5', 'op5', 'T. Suresh'], ['U-OP6', 'op6', 'V. Karthi']]
       .map(([id, u, n]) => [id, u, n, 'PRODUCTION', 'MillOrg', 'Machine Operator', null]),
     ['U-LAB1', 'lab1', 'N. Kavitha', 'QA', 'QualityOrg', 'Lab Technician', null],
@@ -108,6 +118,11 @@ export function generatePlan(seed = 20261028): Plan {
     { id: 'CUST-SLH', code: 'SLH', name: 'Sri Lakshmi Hosiery', city: 'Coimbatore', contact_name: 'L. Lakshmi', email: 'lab@srihosiery.example', phone: '+91 94430 55102', address: '88, Sathy Road, Coimbatore 641006' },
     { id: 'CUST-KVW', code: 'KVW', name: 'Kaveri Weaves', city: 'Erode', contact_name: 'K. Murali', email: 'qa@kaveriweaves.example', phone: '+91 90030 41877', address: '21, Perundurai Road, Erode 638011' },
     { id: 'CUST-GGT', code: 'GGT', name: 'Ganga Garments', city: 'Karur', contact_name: 'P. Gangadharan', email: 'purchase@gangagarments.example', phone: '+91 97910 66320', address: '7, Kovai Road, Karur 639002' },
+    { id: 'CUST-AKT', code: 'AKT', name: 'Arul Knitwear', city: 'Tiruppur', contact_name: 'A. Arulraj', email: 'quality@arulknitwear.example', phone: '+91 98650 31472', address: '52, Pushpa Theatre Road, Tiruppur 641602' },
+    { id: 'CUST-SMT', code: 'SMT', name: 'Sri Murugan Textiles', city: 'Salem', contact_name: 'M. Murugan', email: 'lab@srimurugantex.example', phone: '+91 94430 77281', address: '9, Omalur Main Road, Salem 636005' },
+    { id: 'CUST-BHT', code: 'BHT', name: 'Bharathi Hosiery Mills', city: 'Coimbatore', contact_name: 'R. Bharathi', email: 'qa@bharathihosiery.example', phone: '+91 99940 20315', address: '31, Avarampalayam Road, Coimbatore 641006' },
+    { id: 'CUST-NLF', code: 'NLF', name: 'Nila Fabrics', city: 'Karur', contact_name: 'S. Nilavan', email: 'purchase@nilafabrics.example', phone: '+91 90950 88642', address: '120, Thanthonimalai, Karur 639005' },
+    { id: 'CUST-RKS', code: 'RKS', name: 'Ramkumar Spinners & Knitters', city: 'Erode', contact_name: 'N. Ramkumar', email: 'quality@ramkumarknit.example', phone: '+91 97870 54096', address: '4/17, Surampatti Road, Erode 638009' },
   ];
   const t0 = istMs('2026-08-20', 10);
   CUSTOMERS.forEach((c, i) => rows.push({ type: 'customer', row: { ...c, created_at: iso(t0 + i * 3 * HOUR) }, at: iso(t0 + i * 3 * HOUR), actor: 'U-ADMIN', contract: 'AssetID', fn: 'registerCustomer', label: `Register customer ${c.name}`, method: 'POST', path: '/api/customers' }));
@@ -158,7 +173,7 @@ export function generatePlan(seed = 20261028): Plan {
   const SEED_QA = 'U-QA';
   let mvSeq = 0;
   for (const c of COUNTS) {
-    const all = buildItems(c).filter((i) => !(OMIT[c.id] ?? []).includes(`${i.master}|${i.scope}|${i.key}`));
+    const all = buildItems(c).filter((i) => !(OMIT[c.id] ?? (c.compact ? OMIT['40CP'] : [])).includes(`${i.master}|${i.scope}|${i.key}`));
     itemsOf[c.id] = all;
     for (const i of all) limits.set(`${c.id}|${i.master}|${i.scope}|${i.key}`, i);
     for (const type of MASTER_TYPES) {
@@ -831,6 +846,17 @@ export function generatePlan(seed = 20261028): Plan {
     }
     return { red, yellow };
   };
+  // machine-level tests outside / near the limit (not part of the dispatch gate, but QA still signs off on them)
+  const machineItems = (L: LotPlan) => {
+    const red: Record<string, unknown>[] = []; const yellow: Record<string, unknown>[] = [];
+    for (const t of tests.filter((x) => x.lot === L && x.type === 'MACHINE')) for (const [k, v] of Object.entries(t.values)) {
+      const it = lim(L.mix.count.id, 'QUALITY', t.stage, k);
+      if (!it) continue;
+      const ev = evaluate(v, { std: it.std, lower: it.lower, upper: it.upper }, 0.2);
+      if (ev.color === 'red' || ev.color === 'yellow') (ev.color === 'red' ? red : yellow).push({ stage: t.stage, parameter: k, value: v, std: it.std, lower: it.lower, upper: it.upper, color: ev.color, machineId: t.machine });
+    }
+    return { red, yellow };
+  };
   const overrideRow = (() => {
     const L = lotOf(OVERRIDE_LOT); const pk = packingOf.get(L.no);
     if (!pk) return null;
@@ -839,6 +865,33 @@ export function generatePlan(seed = 20261028): Plan {
     rows.push(row);
     return row;
   })();
+  // More QA overrides: dispatched lots whose lot-level tests have items outside (red) or near (yellow) the master limit.
+  // The reason quotes the actual parameter, value and limit; the dispatch gate below links to the override.
+  const overrideByLot = new Map<number, SeedRow>();
+  if (overrideRow) overrideByLot.set(OVERRIDE_LOT, overrideRow);
+  {
+    const USE: Record<string, string> = { '20S': 'heavy knit fleece', '30CH': 'single-jersey basics', '40CH': 'fine-gauge knit', '40CP': 'premium dyed knit' };
+    const cands = lots.filter((L) => L.no !== OVERRIDE_LOT && L.no !== HOLD_LOT && L.no !== NO_RELEASE_LOT && L.no !== COLOR_BAD_LOT && L.no !== 101 && packingOf.has(L.no) && ships.get(L.no)?.dispatchAt)
+      .filter((L) => ![101, 102, 110, 111].includes(L.no)) // RF-6 window lots: the story is that nobody noticed these
+      .map((L) => { const lotGi = gateItems(L); const machine = !lotGi.red.length && !lotGi.yellow.length; return { L, gi: machine ? machineItems(L) : lotGi, machine }; })
+      .filter((x) => x.gi.red.length || x.gi.yellow.length)
+      .sort((a, b) => (Number(a.machine) - Number(b.machine)) || (b.gi.red.length - a.gi.red.length) || (b.gi.yellow.length - a.gi.yellow.length) || a.L.no - b.L.no);
+    for (const { L, gi, machine } of cands.slice(0, 11)) {
+      const pk = packingOf.get(L.no)!; const s = ships.get(L.no)!;
+      const at = Math.min(pk.at + 3 * HOUR, (s.dispatchAt as number) - 150 * 60_000);
+      if (at <= pk.at) continue;
+      const it = (gi.red[0] ?? gi.yellow[0]) as Record<string, unknown>;
+      const limitTxt = it.upper !== null && it.upper !== undefined ? `upper limit ${it.upper}` : `lower limit ${it.lower}`;
+      const cust = customerName(L.customer);
+      const reason = machine
+        ? `${String(it.parameter)} on ${String(it.machineId)} (${String(it.stage)}) read ${it.value}, ${gi.red.length ? 'outside' : 'inside the warning band of'} the ${limitTxt}. Lot-level composite tests were within master; QA reviewed the machine data and approved dispatch for ${cust}.`
+        : gi.red.length
+        ? `${String(it.parameter)} (${String(it.stage)}) measured ${it.value} against ${limitTxt}${gi.red.length > 1 ? ` (+${gi.red.length - 1} more red item${gi.red.length > 2 ? 's' : ''})` : ''}. ${cust} reviewed the lot data and accepted it for ${USE[L.mix.count.id] ?? 'general knit'} use; QA approved dispatch with a note on the passport.`
+        : `${String(it.parameter)} (${String(it.stage)}) at ${it.value} is inside the warning band of the ${limitTxt}. Lot re-tested and cleared by QA on ${cust}'s delivery schedule.`;
+      const row: SeedRow = { type: 'qa_override', row: { id: nid('OVR', 4), lot_id: L.id, reason, approved_by: 'U-QA', created_at: iso(at) }, at: iso(at), actor: 'U-QA', contract: 'Quality', fn: 'recordOverride', label: `QA override for lot ${L.no}`, method: 'POST', path: '/api/overrides' };
+      rows.push(row); overrideByLot.set(L.no, row);
+    }
+  }
 
   // ---- lots
   const lotRowsById = new Map<number, SeedRow>();
@@ -923,10 +976,11 @@ export function generatePlan(seed = 20261028): Plan {
     const [tName, tCode] = sp ? [sp.transporter, 'SRM'] : pick(TRANSPORT);
     const vehicle = sp?.vehicle ?? `TN-${pick(['38', '39', '37', '56', '33', '43'])}-${pick(['AB', 'BC', 'CD', 'AX', 'BY', 'CK', 'DE'])}-${1000 + Math.floor(rnd() * 8999)}`;
     const noRelease = g.lots.some((l) => l.no === NO_RELEASE_LOT);
-    const override = overrideRow && g.lots.some((l) => l.no === OVERRIDE_LOT) ? overrideRow.row.id as string : null;
+    const overrideIds = g.lots.map((l) => overrideByLot.get(l.no)?.row.id as string | undefined).filter((x): x is string => !!x);
+    const override = overrideIds[0] ?? null;
     const gateLots = g.lots.map((l) => {
       const gi = gateItems(l);
-      const ovr = l.no === OVERRIDE_LOT ? override : null;
+      const ovr = (overrideByLot.get(l.no)?.row.id as string | undefined) ?? null;
       return { lotId: l.id, lotNo: String(l.no), worst: gi.red.length ? 'red' : gi.yellow.length ? 'yellow' : 'green', redItems: gi.red, yellowItems: gi.yellow, machineLevelRed: [], overrideId: ovr, blocked: false };
     });
     const gate = { passed: true, overridden: !!override, checkedAt: iso(g.at - 2 * HOUR), lots: gateLots, message: override ? 'Quality gate passed with a QA override.' : 'Quality gate passed.' };
@@ -936,7 +990,7 @@ export function generatePlan(seed = 20261028): Plan {
       id, dispatch_no: `DSP/2026/${pad(seq, 4)}`, customer_id: g.customer, order_id: orderId, count_id: cid, quantity_kg: net, dispatch_date: istDate(iso(g.at)), dispatched_at: iso(g.at),
       invoice_no: sp?.invoice ?? `INV/26-27/${pad(++invSeq, 4)}`, invoice_date: istDate(iso(g.at)), vehicle_no: vehicle, driver_name: sp?.driver ?? pick(DRIVERS), driver_phone: sp?.phone ?? `+91 9${Math.floor(1e8 + rnd() * 8.9e8)}`.replace(/(\+91 \d{5})(\d{5})/, '$1 $2'),
       transporter: tName, lr_no: sp?.lr ?? `${tCode}/26/${10000 + Math.floor(rnd() * 8999)}`, destination: `${cust.city} — ${cust.address}`, cartons, cones_count: cones, net_kg: net, gross_kg: gross, delivered_at: null,
-      gate: JSON.stringify(gate), override_ids: JSON.stringify(override ? [override] : []), qa_released: noRelease ? 0 : 1, passport_code: `PP-${sha256Hex(id).slice(0, 8).toUpperCase()}`, status: 'DISPATCHED',
+      gate: JSON.stringify(gate), override_ids: JSON.stringify(overrideIds), qa_released: noRelease ? 0 : 1, passport_code: `PP-${sha256Hex(id).slice(0, 8).toUpperCase()}`, status: 'DISPATCHED',
       remarks: sp?.remarks ?? (noRelease ? 'Dispatched on customer request before QA sign-off — needs regularisation' : ''), created_by: 'U-DISPATCH', created_at: iso(g.at),
     };
     const history: HistoryStep[] = delivered ? [{ at: iso(delivered), actor: 'U-DISPATCH', contract: 'Transfer', fn: 'markDelivered', label: `Delivery of ${row.dispatch_no} confirmed at ${cust.name}`, patch: { status: 'DELIVERED', delivered_at: iso(delivered) } }] : [];
@@ -969,12 +1023,44 @@ export function generatePlan(seed = 20261028): Plan {
     { seq: 20, customer: 'CUST-GGT', counts: ['40CH'], prefer: 110, type: 'HAIRINESS', status: 'OPEN', source: 'PORTAL', ageDays: 1, desc: 'Fabric from lot 110 shows more fuzz / hairiness than previous lots — pilling in the first wash.', attach: true },
     { seq: 21, customer: 'CUST-PDT', counts: ['40CP', '30CH', '40CH'], type: 'STRENGTH', status: 'OPEN', source: 'MILL', ageDays: 0.5, desc: 'Yarn breakages on our circular knitting machines increased with this lot (frequent end breaks).' },
   ];
-  const used = new Set<number>([101]);
+  // Older, closed complaints (seq 3–13) so the register, conclusions and AI analyses have a real history. Appended after the
+  // story complaints so lot choice for those is unchanged.
+  const closed = (seq: number, customer: string, counts: string[], type: string, source: 'PORTAL' | 'MILL', ageDays: number, desc: string, root: string, corrective: string, preventive: string, reply: string, html: string): CSpec =>
+    ({ seq, customer, counts, type, status: 'RESOLVED', source, ageDays, desc, attach: true, conclusion: { root, corrective, preventive, reply, html } });
+  CS.push(
+    closed(3, 'CUST-PDT', ['40CH', '30CH', '40CP'], 'EVENNESS', 'PORTAL', 22, 'Cloudy appearance in grey fabric; U% looks higher than previous deliveries.', 'Drafting waves traced to a worn top roller on one drawing frame; U% at roving was in the warning band.', 'Top roller replaced and drafting zone re-set; remaining cones of the lot inspected before release.', 'Roller age added to the weekly drawing-frame checklist.', 'Dear PD Textiles, the evenness issue came from a worn top roller that has now been replaced. The remaining cones were inspected and we have credited the affected cartons.', '<p>Sliver U% was in the warning band on one drawing frame; the same frame produced the cloudy rolls. No other machine contributed.</p>'),
+    closed(4, 'CUST-SLH', ['40CH', '30CH', '20S'], 'HAIRINESS', 'PORTAL', 21, 'Higher fuzz on cones from two cartons; pilling seen after one wash.', 'Spindle speed ran above master on one ring frame for a shift and the traveller was past its change interval.', 'Traveller changed, speed reset to master; cartons from that shift segregated and replaced.', 'Traveller age alert threshold lowered to the warning band on the accessories master.', 'Dear Sri Lakshmi Hosiery, the extra hairiness traced to a worn traveller on one frame. Affected cartons were replaced and the traveller schedule has been tightened.', '<p>Hairiness H and S3 were above master on one ring frame; traveller age exceeded the master by 4 days.</p>'),
+    closed(5, 'CUST-KVW', ['40CH', '40CP'], 'STRENGTH', 'MILL', 20, 'Warp breakages on the loom increased on this lot of yarn.', 'Cotton mix had a lower bundle strength than the recipe target because two bales came from a different gin lot.', 'Lot blended with a stronger lot at dispatch of the balance quantity; breakage claim settled by weight.', 'HVI strength is now checked per gin lot before a bale is issued to a mix.', 'Dear Kaveri Weaves, the lower strength came from two bales of a different gin lot. The balance quantity was blended with a stronger lot and the claim has been settled.', '<p>Mix strength was inside limits on average but the lowest bale was 2 g/tex under the median.</p>'),
+    closed(6, 'CUST-GGT', ['40CH', '20S'], 'THIN_THICK_NEPS', 'PORTAL', 19, 'Neps showing in knitted fabric after dyeing.', 'Card nep removal efficiency dropped in the warning band on one card.', 'Card wire cleaned and flats re-set; one carton replaced.', 'Nep removal efficiency added to the shift-start checks for all cards.', 'Dear Ganga Garments, the neps came from reduced nep removal on one card, which has been serviced. A replacement carton is on its way.', '<p>NEP_REMOVAL on the card was in the yellow zone during the run.</p>'),
+    closed(7, 'CUST-PDT', ['30CH', '40CH', '40CP'], 'SHORT_WEIGHT', 'PORTAL', 18, 'Four cartons weighed about 1 kg under the label weight on our weighbridge.', 'Packing scale had drifted by 0.9 kg at the 50 kg point.', 'Scale recalibrated; short cartons topped up and the customer credited.', 'Daily scale check with a certified 20 kg test weight is now logged at packing.', 'Dear PD Textiles, our packing scale had drifted by about 0.9 kg. It has been recalibrated and the shortfall has been made up.', '<p>Packing slips showed correct net weight; the drift was found at the daily scale verification.</p>'),
+    closed(8, 'CUST-VKF', ['30CH'], 'COUNT_VARIATION', 'PORTAL', 17, 'Barre in fabric suspected to be a count mix-up between cones.', 'Two cones of a neighbouring count were packed into the same carton at the winding doffing stage.', 'The mixed cones were swapped; all cartons of the lot re-checked for tip colour.', 'Cone tip-colour verification added to the carton sealing step.', 'Dear Velan Knit Fabrics, two cones of a neighbouring count had been packed with the lot. They have been swapped and every carton re-checked.', '<p>Tip colour code did not match for 2 of 24 cones in the carton sampled.</p>'),
+    closed(9, 'CUST-SLH', ['40CH', '30CH', '20S'], 'CONTAMINATION', 'MILL', 16, 'Few cones with coloured polypropylene fibres.', 'Strap fragment from a bale entered the blow-room despite the checklist.', 'Cones cleared with a tighter foreign-fibre clearer setting; lot swept.', 'Bale-opening checklist now includes a two-person strap-removal sign-off.', 'Dear Sri Lakshmi Hosiery, the coloured fibres came from a bale strap. The cones were cleared and the opening checklist has been tightened.', '<p>Contamination cuts spiked on one winding drum; strap fragment found under magnification.</p>'),
+    closed(10, 'CUST-KVW', ['40CH', '40CP'], 'SHADE', 'PORTAL', 15, 'Slight shade difference between two cartons after dyeing.', 'Cotton from two mixes with different moisture regains was spun into the same lot.', 'Customer advised to batch dye by carton; lot shade reviewed against the master.', 'Mix moisture regain added to the lot release checklist.', 'Dear Kaveri Weaves, the shade difference came from fibre of two mixes with different moisture. Please batch dye by carton; we have noted this on the lot passport.', '<p>Mix-level HVI moisture and Rd values differed between the two halves of the lot.</p>'),
+    closed(11, 'CUST-GGT', ['40CH', '20S'], 'PACKING_COLOR', 'MILL', 14, 'Cone tip colour on one carton does not match the count ordered.', 'A carton was packed with the previous count\'s cones because the pallet label was not changed.', 'Carton replaced; label template locked to the lot at packing.', 'Pallet label is now printed from the lot record, not reused.', 'Dear Ganga Garments, one carton was packed with a different tip colour. It has been replaced and our label process has been corrected.', '<p>Packing record showed correct colour; the physical carton was from the preceding lot.</p>'),
+    closed(12, 'CUST-PDT', ['30CH', '40CH', '40CP'], 'OTHER', 'PORTAL', 12, 'Cones arrive with loose, damaged outer layers on some pieces.', 'Cartons were stacked five high in the transport vehicle, crushing the lower layers.', 'Damaged cones replaced; transporter instructed on maximum stack height.', 'Stack height limit printed on the carton and added to the dispatch checklist.', 'Dear PD Textiles, transit damage caused the loose layers. The cones have been replaced and the stack limit has been reinforced with the transporter.', '<p>Damage pattern was on the bottom layer only, consistent with stacking load.</p>'),
+    closed(13, 'CUST-SLH', ['40CH', '30CH', '20S'], 'STRENGTH', 'MILL', 10, 'Yarn breakage during warping higher than usual.', 'Single-yarn strength CV sat at the upper limit on one ring frame.', 'Ring-frame spindles lubricated and tension checked; affected cones replaced.', 'Strength CV trend is now reviewed weekly by QA.', 'Dear Sri Lakshmi Hosiery, the warping breaks came from strength CV at the upper limit on one frame. Affected cones have been replaced.', '<p>RF strength CV 0.3 above the std on the frame; the rest of the lot was within the band.</p>'),
+  );
+  // Number the register in order of receipt (the last one is 21, so the live complaint registered in the demo is 22/2026).
+  {
+    // lots 102/111/112 belong to the lot-101 RF-6 recall story, so the filler complaints stay off them
+    const taken = new Set<number>([101, 102, 111, 112]); const pre: { cs: CSpec; rcv: number }[] = [];
+    for (const cs of CS) {
+      const cands = [...dispatchOfLot.entries()].filter(([no]) => lotOf(no).customer === cs.customer && cs.counts.includes(lotOf(no).mix.count.id) && !taken.has(no)).sort((a, b) => a[1].at - b[1].at);
+      const hit = cs.prefer && dispatchOfLot.has(cs.prefer) ? cs.prefer : cands[0]?.[0];
+      if (!hit) continue;
+      taken.add(hit);
+      pre.push({ cs, rcv: Math.max(Math.min(NOW - cs.ageDays * DAY, NOW - 3 * HOUR), dispatchOfLot.get(hit)!.at + 6 * HOUR) });
+    }
+    pre.sort((a, b) => a.rcv - b.rcv);
+    pre.forEach((x, i) => { x.cs.seq = 22 - pre.length + i; });
+  }
+  const complaintSeqOfLot = new Map<number, number>();
+  const used = new Set<number>([101, 102, 111, 112]);
   for (const cs of CS) {
     const cands = [...dispatchOfLot.entries()].filter(([no]) => lotOf(no).customer === cs.customer && cs.counts.includes(lotOf(no).mix.count.id) && !used.has(no)).sort((a, b) => a[1].at - b[1].at);
     const hit = cs.prefer && dispatchOfLot.has(cs.prefer) ? cs.prefer : cands[0]?.[0];
     if (!hit) continue;
-    used.add(hit);
+    used.add(hit); complaintSeqOfLot.set(hit, cs.seq);
     const L = lotOf(hit); const d = dispatchOfLot.get(hit)!;
     const cust = CUSTOMERS.find((c) => c.id === cs.customer)!;
     const receivedAt = Math.min(NOW - cs.ageDays * DAY, NOW - 3 * HOUR);
@@ -1008,17 +1094,169 @@ export function generatePlan(seed = 20261028): Plan {
     }
   }
 
+  // ================================================================ supplementary data (no rnd(): the main stream above is unchanged)
+  // -- orders: new accounts have open orders and no shipments yet
+  {
+    const NEW_ORDERS: [string, string, number, number, number][] = [
+      ['CUST-AKT', '24CH', 6000, 6, 18], ['CUST-AKT', '40CH', 4500, 4, 24], ['CUST-SMT', '30CP', 3000, 5, 21], ['CUST-SMT', '16S', 8000, 3, 30],
+      ['CUST-BHT', '34CH', 5000, 2, 20], ['CUST-BHT', '50CP', 2500, 1, 28], ['CUST-NLF', '24CH', 7000, 4, 16], ['CUST-RKS', '60CP', 1800, 2, 35], ['CUST-RKS', '30CH', 5500, 1, 26],
+    ];
+    let n = orders.length;
+    for (const [customer, cid, kg, daysAgo, dueIn] of NEW_ORDERS) {
+      n += 1; const id = `ORD-2026-${pad(n)}`; const code = CUSTOMERS.find((c) => c.id === customer)!.code;
+      orders.push({ id, order_no: id, po_no: `PO/${code}/2026/${100 + n * 7}`, customer_id: customer, count_id: cid, qty_kg: kg, ordered_at: iso(NOW - daysAgo * DAY), due_date: istDate(iso(NOW + dueIn * DAY)), status: 'OPEN' });
+    }
+  }
+
+  // -- notifications
   const notifications = [
     { id: 'N-1', severity: 'critical', title: 'Lot 126 on QA hold', body: 'Composite count CV is out of limits — dispatch blocked.', link: '/lots/LOT-126', created_at: iso(NOW - 3 * HOUR) },
     { id: 'N-2', severity: 'warning', title: 'Traveller overdue on RF-2', body: 'Traveller age 21 days vs master 18.', link: '/accessories', created_at: iso(NOW - 5 * HOUR) },
     { id: 'N-3', severity: 'warning', title: 'Cone colour mismatch at packing (lot 119)', body: 'Blue tip used for 40s CH (master: green).', link: '/lots/LOT-119', created_at: iso(NOW - 2 * DAY) },
     { id: 'N-4', severity: 'info', title: 'Master v2 awaiting approval', body: '30s CH Production master v2 (spindle speed trial).', link: '/masters', created_at: iso(NOW - 2 * DAY) },
+    { id: 'N-5', severity: 'critical', title: 'Lot 112 dispatched without QA release', body: 'Dispatch left on customer request before sign-off — regularise the release.', link: '/lots/LOT-112', created_at: iso(NOW - 26 * HOUR) },
+    { id: 'N-6', severity: 'warning', title: `Complaint ${complaintSeqOfLot.get(110) ?? 20}/2026 awaiting analysis`, body: 'Hairiness complaint from Ganga Garments is still open after 24 h.', link: '/complaints', created_at: iso(NOW - 20 * HOUR) },
+    { id: 'N-7', severity: 'info', title: 'New customer onboarded: Arul Knitwear', body: 'Two open orders (24s CH, 40s CH) are ready for planning.', link: '/dispatch', created_at: iso(NOW - 4 * DAY) },
+    { id: 'N-8', severity: 'info', title: 'New counts released: 24s CH, 34s CH, 30s/50s/60s compact', body: 'Master sets for the new counts are active from 1 Sep 2026.', link: '/masters', created_at: iso(NOW - 6 * DAY) },
+    { id: 'N-9', severity: 'warning', title: 'QA override recorded on a dispatched lot', body: 'A lot with a parameter outside the master limit was released with a QA override; review the reason.', link: '/quality', created_at: iso(NOW - 30 * HOUR) },
+    { id: 'N-10', severity: 'warning', title: 'Card 11 nep removal in warning band', body: 'CARD NEP_REMOVAL has been in the yellow zone for two shifts.', link: '/live', created_at: iso(NOW - 8 * HOUR) },
+    { id: 'N-11', severity: 'info', title: 'Historical PDF import ready for review', body: 'Production register for Sep 2026 was extracted; 3 warnings need a look.', link: '/masters', created_at: iso(NOW - 12 * HOUR) },
+    { id: 'N-12', severity: 'critical', title: 'Ledger tamper drill detected and restored', body: 'The developer console tamper test was caught by chain validation and then restored.', link: '/quality', created_at: iso(NOW - 40 * HOUR) },
   ];
+
+  // -- settings: mill profile + operating policy (millName / warnFraction are the editable ones; the rest are read-only profile values)
+  const settings: Record<string, unknown> = {
+    millName: 'Model Spinning Mill — Unit 1', warnFraction: 0.2, businessDate: TODAY, nowIso: config.seedNowIso,
+    millAddress: 'SF 112/3, Mill Road, Palladam, Tiruppur District 641664', gstin: '33AABCM1234F1Z5', contactEmail: 'quality@modelspinning.example', timezone: 'Asia/Kolkata',
+    shiftPattern: { A: '06:00–14:00', B: '14:00–22:00', C: '22:00–06:00' }, spindlesInstalled: 25920, complaintSlaHours: { acknowledge: 4, close: 72 },
+    ledgerBlockPolicy: 'One block per production day, 3-of-4 validator approvals', dataRetentionYears: 8,
+  };
+
+  // -- historical PDF imports (read-only previews of old registers; nothing here is written to the live tables)
+  const pdfImports: SeedPdfImport[] = [];
+  {
+    const SUP = [['Vasan Cotton Traders', 'Adoni'], ['Sri Lakshmi Ginning', 'Rajkot'], ['Kovai Cotton Corp', 'Pollachi'], ['Balaji Agro Fibres', 'Raichur'], ['Mahalaxmi Ginners', 'Surendranagar']];
+    const VARS = ['Shankar-6', 'DCH-32', 'MCU-5', 'Suvin'];
+    const MONTHS = ['Apr 2026', 'May 2026', 'Jun 2026', 'Jul 2026', 'Aug 2026', 'Aug 2026', 'Sep 2026', 'Sep 2026', 'Sep 2026', 'Oct 2026'];
+    const KINDS = ['Bale Receipt Register', 'Bale Receipt Register', 'Bale Receipt Register', 'Mix & Lot Register', 'Mix & Lot Register', 'Mix & Lot Register', 'Production Stage Log', 'Quality Test Sheet', 'Packing & Dispatch Register', 'Packing & Dispatch Register'];
+    const staff = ['U-ADMIN', 'U-OPERATOR', 'U-QA'];
+    for (let j = 0; j < 12; j++) {
+      const month = MONTHS[j % 10]; const kind = KINDS[j % 10];
+      const monthNo = ({ Apr: '04', May: '05', Jun: '06', Jul: '07', Aug: '08', Sep: '09', Oct: '10' } as Record<string, string>)[month.slice(0, 3)];
+      const bales = Array.from({ length: 6 }, (_, k) => {
+        const [supplier] = SUP[(j + k) % SUP.length]; const variety = VARS[(j + k) % VARS.length]; const w = 168 + ((j * 7 + k * 3) % 14);
+        const missingBin = j === 3 && k === 4;
+        return { baleNo: `HIST-${month.slice(0, 3).toUpperCase()}-${pad(100 + j * 6 + k)}`, supplier, variety, weightKg: w, bay: `BAY-${'ABCD'[(j + k) % 4]}`, bin: missingBin ? null : `${'ABCD'[(j + k) % 4]}-${pad(1 + ((j * 6 + k) % 30), 2)}`, fibre: { MIC: r1(4.1 + ((j + k) % 5) * 0.08, 2), UHML: r1(28.4 + ((j * 3 + k) % 7) * 0.4, 1), UI: r1(81.5 + ((j + k * 2) % 4) * 0.5, 1), STR: r1(28.5 + ((j + k) % 6) * 0.45, 1), SFI: r1(7.2 + ((j + k) % 5) * 0.2, 1), TRASH: r1(1.9 + ((j + k) % 4) * 0.1, 2), MOIST: r1(7.2 + ((j + k) % 4) * 0.15, 1), RD: r1(73 + ((j + k) % 5) * 0.8, 1), PLUS_B: r1(8.1 + ((j + k) % 4) * 0.3, 1) } };
+      });
+      const cid = ['40CH', '30CH', '20S', '40CP'][j % 4];
+      const mixes = [0, 1].map((m) => ({ mixNo: `HM-${monthNo}${j}${m}`, countId: cid, baleNos: bales.slice(m * 3, m * 3 + 3).map((b) => b.baleNo), totalKg: bales.slice(m * 3, m * 3 + 3).reduce((x, b) => x + b.weightKg, 0) }));
+      const lots = mixes.map((m, i) => ({ lotNo: `H${200 + j * 2 + i}`, countId: cid, mixNo: m.mixNo, plannedKg: Math.round(m.totalKg * 0.86), startDate: `2026-${monthNo}-${pad(3 + j * 2 + i, 2)}` }));
+      const isStageLog = kind === 'Production Stage Log'; const isTest = kind === 'Quality Test Sheet'; const isPack = kind === 'Packing & Dispatch Register'; const isBale = kind === 'Bale Receipt Register'; const isMix = kind === 'Mix & Lot Register';
+      const structured: Record<string, unknown> = {
+        bales: isBale || isMix ? bales : [], mixes: isMix ? mixes : [], lots: isMix ? lots : [],
+        stageRuns: isStageLog ? ['BR', 'CARD', 'DFB', 'RF'].map((st, i) => ({ lotNo: lots[0].lotNo, stage: st, inAt: `2026-${monthNo}-${pad(4 + i, 2)}T06:00:00+05:30`, inputKg: 400 - i * 12, outputKg: 380 - i * 14, wasteKg: 17 + i })) : [],
+        testResults: isTest ? [{ lotNo: lots[0].lotNo, stage: 'RF', sampleType: 'LOT', testedAt: `2026-${monthNo}-09T11:30:00+05:30`, values: { U: 9.8 + (j % 3) * 0.2, CV: 11.9 + (j % 4) * 0.1, H: 5.9 + (j % 3) * 0.05 } }, { lotNo: lots[1].lotNo, stage: 'AW', sampleType: 'LOT', testedAt: `2026-${monthNo}-12T15:10:00+05:30`, values: { U: 10 + (j % 2) * 0.3, CV: 12.2, H: 6.1 } }] : [],
+        packing: isPack ? lots.map((l) => ({ lotNo: l.lotNo, packedAt: `2026-${monthNo}-20T16:00:00+05:30`, cartons: 9, netKg: Math.round(l.plannedKg * 0.97) })) : [],
+        orders: isPack ? [{ orderNo: `HO-${monthNo}-${j}`, poNo: `PO/HIST/2026/${300 + j}`, countId: cid, qtyKg: 2500 }] : [],
+        dispatches: isPack ? [{ dispatchNo: `HD/${monthNo}/${pad(10 + j)}`, lotNos: lots.map((l) => l.lotNo), vehicleNo: `TN-39-AB-${4000 + j * 13}`, dispatchedAt: `2026-${monthNo}-22T09:00:00+05:30` }] : [],
+        unknownFields: j === 3 ? [{ label: 'Gate pass remark', value: 'see attached' }, { label: 'Godown ref', value: 'G-2/B' }] : [],
+      };
+      const warnings: string[] = [];
+      for (const b of structured.bales as typeof bales) if (!b.bay || !b.bin) warnings.push(`Bale ${b.baleNo}: storage bay/bin needs review`);
+      if (!(structured.bales as unknown[]).length) warnings.push('No bale records were identified.');
+      if (!(structured.mixes as unknown[]).length) warnings.push('No mix records were identified.');
+      if (!(structured.lots as unknown[]).length) warnings.push('No lot records were identified.');
+      if ((structured.unknownFields as unknown[]).length) warnings.push(`${(structured.unknownFields as unknown[]).length} field(s) could not be classified and need review.`);
+      const counts = Object.fromEntries(['bales', 'mixes', 'lots', 'stageRuns', 'testResults', 'packing', 'orders', 'dispatches', 'unknownFields'].map((k) => [k, (structured[k] as unknown[]).length]));
+      const fileName = `${kind.replace(/[ &]+/g, '_')}_${month.replace(' ', '_')}${j >= 10 ? '_scan2' : ''}.pdf`;
+      const text = [`MODEL SPINNING MILL — UNIT 1`, `${kind.toUpperCase()} — ${month}`, 'Historical records',
+        ...(isBale || isMix ? ['Bales', 'Bale No | Supplier | Variety | Wt (kg) | Bay | Bin', ...bales.map((b) => `${b.baleNo} | ${b.supplier} | ${b.variety} | ${b.weightKg} | ${b.bay} | ${b.bin ?? ''}`)] : []),
+        ...(isMix ? ['Cotton mixes', ...mixes.map((m) => `${m.mixNo} | ${m.countId} | ${m.baleNos.join(', ')} | ${m.totalKg} kg`), 'Production lots', ...lots.map((l) => `${l.lotNo} | ${l.countId} | ${l.mixNo} | ${l.plannedKg} kg | ${l.startDate}`)] : []),
+        ...(isStageLog ? ['Production stages', ...(structured.stageRuns as Record<string, unknown>[]).map((r) => `${r.lotNo} | ${r.stage} | in ${r.inputKg} kg | out ${r.outputKg} kg | waste ${r.wasteKg} kg`)] : []),
+        ...(isTest ? ['Quality test results', ...(structured.testResults as Record<string, unknown>[]).map((t) => `${t.lotNo} | ${t.stage} | ${JSON.stringify(t.values)}`)] : []),
+        ...(isPack ? ['Packing', ...(structured.packing as Record<string, unknown>[]).map((x) => `${x.lotNo} | ${x.cartons} cartons | ${x.netKg} kg`), 'Dispatches', ...(structured.dispatches as Record<string, unknown>[]).map((d) => `${d.dispatchNo} | ${d.vehicleNo}`)] : []),
+        'Prepared by: Stores / QA   Checked by: Mill Manager'].join('\n');
+      const uploadedAt = NOW - (13 - j) * DAY - 2 * HOUR; const uploader = staff[j % 3]; const reviewed = j < 10;
+      pdfImports.push({
+        job: { id: `PDFIMP-SEED-${pad(j + 1, 3)}`, file_name: fileName, source_sha256: sha256Hex(`${fileName}|${text}`), page_count: 2 + (j % 5), file_size: 61_000 + j * 23_417, extracted_text: text, status: reviewed ? 'REVIEWED' : 'PREVIEW', uploaded_by: uploader, uploaded_at: iso(uploadedAt), reviewed_by: reviewed ? 'U-QA' : null, reviewed_at: reviewed ? iso(uploadedAt + (3 + j) * HOUR) : null },
+        extraction: reviewed ? { id: `PDFEXT-SEED-${pad(j + 1, 3)}`, structured_json: JSON.stringify(structured), validation_json: JSON.stringify({ errors: [], warnings, counts }), model_name: j % 4 === 3 ? 'gemini-3.8-flash-lite' : config.gemini.model, extracted_at: iso(uploadedAt + 40 * 60_000), updated_by: uploader } : null,
+      });
+    }
+  }
+
+  // -- refused contract calls (INVALID txs with a reason) — the validations visibly doing their job
+  const rejections: SeedRejection[] = [];
+  {
+    const unsent = lots.find((L) => packingOf.has(L.no) && !ships.get(L.no)?.dispatchAt && L.no !== HOLD_LOT);
+    const inProgress = lots.find((L) => !L.mix.planned && !ships.get(L.no)?.dispatchAt && !packingOf.has(L.no));
+    const planned = lots.find((L) => L.mix.planned);
+    const delivered = rows.find((r) => r.type === 'dispatch' && (r.history ?? []).some((h) => h.patch.status === 'DELIVERED'));
+    const hoursAgo = [5, 9, 14, 22, 27, 31, 46, 52, 70, 76, 95, 110, 130];
+    let ri = 0;
+    const add = (actor: string, contract: string, fn: string, label: string, path: string, payload: Record<string, unknown>, rule: string, message: string, status = 422, after = 0) => {
+      const at = Math.min(NOW - HOUR, Math.max(NOW - hoursAgo[ri++] * HOUR, after));
+      rejections.push({ at: iso(at), actor, contract, fn, label, method: 'POST', path, payload, rule, message, status });
+    };
+    const packedAt = (n: number) => (packingOf.get(n)?.at ?? 0) + HOUR;
+    const dsp = (L: LotPlan, extra: Record<string, unknown> = {}) => ({ customerId: L.customer, lots: [{ lotId: L.id, quantityKg: packingOf.get(L.no)?.net ?? 0 }], vehicleNo: 'TN-39-AB-4521', driverName: 'R. Murugesan', transporter: 'SRM Roadways', lrNo: 'SRM/26/10600', invoiceNo: 'INV/26-27/0430', ...extra });
+    const hold = lotOf(HOLD_LOT); const norel = lotOf(NO_RELEASE_LOT);
+    add('U-DISPATCH', 'Transfer', 'createDispatch', `Dispatch attempt for lot ${HOLD_LOT} refused: on QA hold`, '/api/dispatches', dsp(hold), 'lot-open', `Lot ${HOLD_LOT} is on QA hold`, 422, packedAt(HOLD_LOT));
+    if (unsent) {
+      add('U-DISPATCH', 'Transfer', 'createDispatch', `Dispatch attempt refused: vehicle number format (lot ${unsent.no})`, '/api/dispatches', dsp(unsent, { vehicleNo: 'TN39AB4521' }), 'vehicle-format', 'Vehicle number format is invalid (e.g. TN-39-AB-4521)', 422, packedAt(unsent.no));
+      const net = packingOf.get(unsent.no)!.net;
+      add('U-DISPATCH', 'Transfer', 'createDispatch', `Dispatch attempt refused: quantity above packed stock (lot ${unsent.no})`, '/api/dispatches', dsp(unsent, { lots: [{ lotId: unsent.id, quantityKg: r1(net + 180, 1) }] }), 'mass-balance-custody', `Lot ${unsent.no}: ${r1(net, 1)} kg packed & undispatched, requested ${r1(net + 180, 1)} kg`, 422, packedAt(unsent.no));
+      add('U-CS', 'Access', 'checkPermission', 'Dispatch attempt refused: role not permitted', '/api/dispatches', { requested: 'Transfer.createDispatch', role: 'CUSTOMER_SERVICE', userId: 'U-CS', argsHash: sha256Hex(`createDispatch|${unsent.id}`) }, 'access:permission', 'Access contract: role CUSTOMER_SERVICE is not permitted to invoke Transfer.createDispatch', 403, packedAt(unsent.no));
+    }
+    if (packingOf.has(NO_RELEASE_LOT)) add('U-DISPATCH', 'Transfer', 'createDispatch', `Dispatch attempt for lot ${NO_RELEASE_LOT} refused: no QA release`, '/api/dispatches', dsp(norel), 'qa-release', `Dispatch without QA release is not allowed: lot ${NO_RELEASE_LOT} has no QA release.`, 422, packedAt(NO_RELEASE_LOT));
+    add('U-DISPATCH', 'Transfer', 'createDispatch', 'Dispatch attempt refused: unknown customer', '/api/dispatches', { ...dsp(lotOf(101)), customerId: 'CUST-XYZ' }, 'customer-exists', 'Customer CUST-XYZ does not exist', 404);
+    add('U-OPERATOR', 'ProcessEvent', 'logStageRun', 'Stage run refused: lot already dispatched', '/api/stage-runs', { lotId: lotOf(101).id, stage: 'RF', machineId: 'RF-6', inAt: iso(NOW - 3 * HOUR), inputKg: 400, outputKg: 380, wasteKg: 18 }, 'lot-open', 'Lot 101 has already been dispatched', 409);
+    if (planned) add('U-OPERATOR', 'ProcessEvent', 'logStageRun', `Stage run refused: bales not issued (lot ${planned.no})`, '/api/stage-runs', { lotId: planned.id, stage: 'BR', machineId: 'BR-2', inAt: iso(NOW - 2 * HOUR), inputKg: 450, outputKg: 430, wasteKg: 18 }, 'mix-issued', 'The bales of this lot have not been issued from the bale store yet', 409);
+    if (inProgress) {
+      add('U-OP4', 'ProcessEvent', 'logStageRun', `Stage run refused: wrong machine for the stage (lot ${inProgress.no})`, '/api/stage-runs', { lotId: inProgress.id, stage: 'RF', machineId: 'CARD-3', inAt: iso(NOW - 4 * HOUR), inputKg: 400, outputKg: 380, wasteKg: 18 }, 'machine-in-department', `CARD-3 is not a ${STAGE_INFO.RF.label} machine`, 422);
+      add('U-OP2', 'ProcessEvent', 'logStageRun', `Stage run refused: mass balance off (lot ${inProgress.no})`, '/api/stage-runs', { lotId: inProgress.id, stage: 'CARD', machineId: 'CARD-1', inAt: iso(NOW - 6 * HOUR), outAt: iso(NOW - 5 * HOUR), inputKg: 1000, outputKg: 900, wasteKg: 20 }, 'mass-balance', 'Mass balance off by 8.0% (input 1000 ≠ output 900 + waste 20)', 422);
+    }
+    add('U-QA', 'Master', 'approve', 'Approve refused: version is not a draft', '/api/masters/versions/MV-30CH-QUALITY-1/approve', { versionId: 'MV-30CH-QUALITY-1' }, 'status-draft', 'Only a DRAFT version can be approved (this one is ACTIVE)', 409);
+    add('U-QA', 'Master', 'reject', 'Reject refused: reason missing', '/api/masters/versions/MV-40CH-QUALITY-2/reject', { versionId: 'MV-40CH-QUALITY-2', reason: 'no' }, 'reason-required', 'A reason of at least 5 characters is required', 422);
+    if (delivered) add('U-DISPATCH', 'Transfer', 'markDelivered', `Delivery confirmation refused: ${String(delivered.row.dispatch_no)} already delivered`, '/api/dispatches/' + String(delivered.row.id) + '/deliver', { dispatchId: delivered.row.id, deliveredAt: iso(NOW - 2 * HOUR) }, 'status-dispatched', `Dispatch ${String(delivered.row.dispatch_no)} is already DELIVERED`, 409);
+  }
+
+  // -- fill sparse descriptive columns deterministically (rows keep their values; only empty text fields are completed)
+  {
+    const countOfLot = new Map(lots.map((L) => [L.id, L.mix.count.id]));
+    const PACK_NOTES = ['Cone weights spot-checked on a calibrated scale (3 cones per carton).', 'Cartons strapped with 2 PP straps and pallet-wrapped; labels scanned at sealing.', 'Tip colour verified against the colour master before carton sealing.', 'Polybag separators fitted; moisture-barrier layer intact on all cartons.'];
+    const DSP_REMARKS = ['Vehicle sealed at the gate; seal number noted on the gate pass.', 'Lot passport QR printed on every carton; customer informed by e-mail.', 'Loaded under dispatch in-charge supervision; cartons stacked max 4 high.', 'Delivery slot confirmed with the customer stores in advance.'];
+    const ACC_NOTE: Record<string, string> = { TRAVELLER: 'Travellers changed on schedule; old set discarded.', COT: 'Top rollers (cots) replaced and ground to spec.', COT_BUFF: 'Cots buffed to restore surface finish.', APRON: 'Aprons replaced at the interval set in the accessories master.', SPACER: 'Spacer set to the master gauge and verified with a feeler gauge.', CARD_WIRE: 'Card wire re-clothed; first-hour sliver tested.', FLAT_GRIND: 'Flats ground and set to the master gauge.' };
+    const ITEM_NOTE: Record<string, string> = { QUALITY: 'Limit set from the mill quality standard; warning band at 20% of the limit.', PRODUCTION: 'Set point per machine manual; tolerance per mill practice.', ACCESSORIES: 'Change interval per the maintenance schedule.', COUNT_MIX: 'Recipe band per cotton-mix policy.', COLOR: 'Cone tip colour per the packing colour master.' };
+    let ip = 0; let id = 0;
+    for (const r of rows) {
+      const row = r.row;
+      const empty = (k: string) => row[k] === undefined || row[k] === null || row[k] === '';
+      if (r.type === 'packing' && empty('notes')) row.notes = PACK_NOTES[ip++ % PACK_NOTES.length];
+      else if (r.type === 'dispatch' && empty('remarks')) row.remarks = DSP_REMARKS[id++ % DSP_REMARKS.length];
+      else if (r.type === 'accessory_change' && empty('note')) row.note = ACC_NOTE[String(row.kind)] ?? 'Changed as per schedule.';
+      else if (r.type === 'master_item' && empty('note')) row.note = ITEM_NOTE[String(row.master_type)] ?? 'Per mill standard.';
+      else if (r.type === 'stage_run' && empty('notes') && row.out_at) {
+        const inKg = Number(row.input_kg); const pct = inKg > 0 ? r1((Number(row.waste_kg) / inKg) * 100, 1) : 0;
+        row.notes = `Run completed normally; waste ${pct}% of input, mass balance within tolerance.`;
+      } else if (r.type === 'test_result' && empty('remarks')) {
+        const cid = countOfLot.get(String(row.lot_id)); const vals = JSON.parse(String(row.values_json)) as Record<string, number>;
+        let red = ''; let yellow = '';
+        if (cid) for (const [k, v] of Object.entries(vals)) {
+          const it = lim(cid, 'QUALITY', String(row.stage) as Stage, k); if (!it) continue;
+          const ev = evaluate(v, { std: it.std, lower: it.lower, upper: it.upper }, 0.2);
+          const lt = it.upper !== null && ev.color !== 'green' && v > it.std ? `limit ${it.upper}` : `limit ${it.lower}`;
+          if (ev.color === 'red' && !red) red = `${k} ${v} (${lt})`;
+          else if (ev.color === 'yellow' && !yellow) yellow = `${k} ${v} (${lt})`;
+        }
+        row.remarks = red ? `Out of limit: ${red}; flagged to QA for review.` : yellow ? `Warning band: ${yellow}; monitor next shift.` : 'All measured parameters within master limits.';
+      }
+    }
+  }
   const sequences: Record<string, number> = { 'complaint:2026': 21, 'dispatch:2026': dspSeq, 'lot:2026': 140, 'mix:2026': mixes.length, 'slip:2026': slipSeq };
   for (const [k, v] of Object.entries(idSeq)) sequences[`id:${k}`] = v;
   return {
-    users, counts, orders, rows, files, notifications,
-    settings: { millName: 'Model Spinning Mill — Unit 1', warnFraction: 0.2, businessDate: TODAY, nowIso: config.seedNowIso },
+    users, counts, orders, rows, files, notifications, rejections, pdfImports,
+    settings,
     sequences,
     facts: { demoLot: 'LOT-101', rf6Fix: iso(RF6_FIX), holdLot: HOLD_LOT, noReleaseLot: NO_RELEASE_LOT, colorBadLot: COLOR_BAD_LOT, overrideLot: OVERRIDE_LOT, lots: lots.length, bales: bales.length, mixes: mixes.length },
   };
