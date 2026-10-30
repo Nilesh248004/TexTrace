@@ -98,3 +98,15 @@
 @media (prefers-reduced-motion: reduce) { .zeon-fab *, .zeon-fab::before, .zeon-fab::after, .zeon-orb::after, .zeon-ico.mic.on, .zeon-msg.typing i, .zeon-panel { animation: none !important; } .zeon-orb, .zeon-tilt, .zeon-chips button { transition: none; } }
 @media print { .zeon { display: none !important; } }
 @media (max-width: 560px) { .zeon { right: 22px; bottom: 28px; --zb: 28px; } }
+
+/* ---- Zeon's face (winks, smiles and laughs when the panel opens) */
+.zeon-face { position: relative; flex-shrink: 0; pointer-events: none; }
+.zeon-face-box { position: absolute; left: 0; top: 0; width: 360px; height: 360px; transform-origin: 0 0; }
+.zeon-face-st { position: absolute; left: 30px; top: 22px; width: 300px; height: 300px; transform-origin: 50% 62%; }
+.zeon-face-st svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.zeon-face-sh { position: absolute; left: 50%; top: 326px; width: 120px; height: 15px; margin-left: -60px; border-radius: 50%; background: radial-gradient(ellipse, rgba(30, 30, 110, .4), transparent 70%); filter: blur(4px); }
+.zeon-face-st.cry { width: 330px; height: 330px; } .zeon-face-sh.cry { top: 350px; width: 145px; height: 18px; margin-left: -72.5px; }
+/* the icon once Zeon has been opened: the happy face while open, the crying face after it is closed (it replaces the plain orb) */
+.zeon-mood { position: absolute; left: -20px; top: -20px; width: 104px; height: 104px; pointer-events: none; }
+.zeon-mood .zeon-face-sh { display: none; }
+.zeon-fab:hover .zeon-mood { transform: scale(1.06); } .zeon-mood { transition: transform .25s cubic-bezier(.3, 1.6, .5, 1); }
