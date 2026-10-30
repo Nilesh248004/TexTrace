@@ -20,8 +20,8 @@ export const AssetIdContract: ContractModule = {
         ctx.check('weight-positive', Number(args.weightKg) > 100 && Number(args.weightKg) < 300, 'Bale weight must be between 100 and 300 kg', 'VALIDATION_FAILED');
         ctx.check('hvi-complete', FIBRE_KEYS.every((k) => Number.isFinite(Number(args.fibre?.[k]))), `HVI data required: ${FIBRE_KEYS.join(', ')}`, 'VALIDATION_FAILED');
         ctx.check('bay-bin-present', !!args.bay?.trim() && !!args.bin?.trim() && !!args.supplier?.trim() && !!args.variety?.trim(), 'Supplier, variety, bay and bin are required', 'VALIDATION_FAILED');
-        const arrivalDate = args.arrivalDate ?? args.receivedAt ?? ctx.timestamp;
-        const receivedAt = args.receivedAt ?? arrivalDate;
+        const receivedAt = args.receivedAt ?? args.arrivalDate ?? ctx.timestamp;
+        const arrivalDate = (args.arrivalDate ?? args.receivedAt ?? ctx.timestamp).slice(0, 10);
         const row = await ctx.insert('bale', { id: `BALE-${no}`, bale_no: no, supplier: args.supplier.trim(), station: args.station?.trim() ?? '', variety: args.variety.trim(), gin_lot: args.ginLot?.trim() ?? '', weight_kg: Number(args.weightKg), remaining_kg: Number(args.weightKg), received_at: receivedAt, arrival_date: arrivalDate, bay: args.bay.trim(), bin: args.bin.trim(), status: 'IN_STORE', issued_at: null, mix_id: null, fibre: JSON.stringify(args.fibre), created_at: ctx.timestamp });
         ctx.setPayload({ baleId: row.id, variety: args.variety, bay: args.bay, bin: args.bin, weightKg: args.weightKg });
         return row;
