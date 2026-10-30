@@ -45,10 +45,10 @@ describe('Zeon on Gemini', () => {
   });
 
   it('uses a thinking budget on 2.5 models and a level on newer ones', () => {
-    expect(thinkingFor('gemini-2.5-flash', 'low')).toEqual({ thinkingBudget: 256 }); expect(thinkingFor('gemini-2.5-flash-lite', 'low')).toEqual({ thinkingBudget: 0 }); expect(thinkingFor('gemini-3.8-flash', 'low')).toEqual({ thinkingLevel: 'LOW' });
+    expect(thinkingFor('gemini-2.5-flash', 'low')).toEqual({ thinkingBudget: 256 }); expect(thinkingFor('gemini-2.5-flash-lite', 'low')).toEqual({ thinkingBudget: 0 }); expect(thinkingFor('gemini-3.8-flash', 'low')).toEqual({ thinkingLevel: 'MINIMAL' });
   });
 
-  it('maps effort to a thinking level', () => { expect(thinkingLevelFor('low')).toBe('LOW'); expect(thinkingLevelFor('max')).toBe('HIGH'); expect(thinkingLevelFor('weird')).toBe('LOW'); });
+  it('maps effort to a thinking level', () => { expect(thinkingLevelFor('low')).toBe('MINIMAL'); expect(thinkingLevelFor('max')).toBe('HIGH'); expect(thinkingLevelFor('weird')).toBe('MINIMAL'); });
 
   describe('the call', () => {
     const ok = res({ candidates: [{ content: { role: 'model', parts: [{ text: 'fine' }] }, finishReason: 'STOP' }] });
@@ -64,8 +64,11 @@ describe('Zeon on Gemini', () => {
     it('falls back to another model when the first is overloaded, but not once tools have run', async () => {
       const a = fake(apiError(503), ok);
       expect((await geminiModel(a.client)(request())).text).toBe('fine'); expect(a.calls.map((c) => c.model)).toEqual([config.zeon.model, config.zeon.fallbackModels[0]]);
-      const b = fake(apiError(503), ok);
-      await expect(geminiModel(b.client)(request([{ role: 'user', text: 'q' }, { role: 'model', text: '', raw: {} }, { role: 'tool', results: [] }]))).rejects.toThrow(); expect(b.calls).toHaveLength(1);
+      const b = fake(apiError(504), ok); // mid-lookup there is only one model to use, so it is retried once instead
+      const mid = request([{ role: 'user', text: 'q' }, { role: 'model', text: '', raw: {} }, { role: 'tool', results: [] }]);
+      expect((await geminiModel(b.client)(mid)).text).toBe('fine'); expect(b.calls.map((c) => c.model)).toEqual([config.zeon.model, config.zeon.model]);
+      const c = fake(apiError(504), apiError(504));
+      await expect(geminiModel(c.client)(mid)).rejects.toMatchObject({ status: 504 }); expect(c.calls).toHaveLength(2);
     });
 
     it('skips a model that is not available to the key (404) and tries the next', async () => {
