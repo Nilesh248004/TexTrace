@@ -162,7 +162,7 @@ export default function PdfImport(): JSX.Element {
       const job = await api<ImportJob>(
         `/api/pdf-import/${encodeURIComponent(current.id)}/extract`,
         token,
-        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmDemoData: isDemoDataset }) },
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
       );
       setCurrent(job);
       setStructuredDraft(JSON.stringify(job.structured ?? {}, null, 2));
