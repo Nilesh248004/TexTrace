@@ -141,7 +141,7 @@ export async function seedDatabase(db: DB, ledger: LedgerService, _profile: 'ful
       await insert('pdf_import_jobs', pi.job);
       if (pi.extraction) await insert('pdf_import_extractions', { ...pi.extraction, job_id: pi.job.id });
     }
-    for (const n of plan.notifications) await run('INSERT INTO notifications(id,severity,title,body,link,created_at,read) VALUES(?,?,?,?,?,?,0)', n.id, n.severity, n.title, n.body, n.link, n.created_at);
+    for (const n of plan.notifications) await run('INSERT INTO notifications(id,severity,title,body,link,created_at,read) VALUES(?,?,?,?,?,?,?)', n.id, n.severity, n.title, n.body, n.link, n.created_at, (n as { read?: number }).read ?? 0);
   })();
   // AI analyses for complaints that are in progress (run through the same engine the product uses)
   invalidateMasters();

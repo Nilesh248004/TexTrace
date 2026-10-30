@@ -9,7 +9,8 @@ import { ColorPill, Card, CardBody, CardHead, ColorIcon, Kpi, Legend, Loading, P
 import { fmtDT, kg, num, pct } from '../lib/fmt';
 import { MiniHeat } from '../components/dash/MiniHeat';
 
-const SERIES = ['--series-1', '--series-2', '--series-3', '--series-7'];
+// fallback only: each count's bar uses its own cone-tip colour so the chart matches the swatch on its card
+const SERIES = ['--series-1', '--series-2', '--series-3', '--series-4', '--series-5', '--series-6', '--series-7'];
 const ALERT_LABEL: Record<Alert['kind'], string> = { OUT_OF_MASTER: 'Out of master', ACCESSORY_OVERDUE: 'Accessory', MASS_BALANCE: 'Mass balance', COLOR_MISMATCH: 'Cone colour', NO_QA_RELEASE: 'No QA release', QA_HOLD: 'QA hold', REPEAT_COMPLAINT: 'Repeat complaint', MASTER_PENDING: 'Master pending' };
 
 function Vs({ actual, master, color, unit = '%', d = 1 }: { actual: number | null; master: number | null; color: Color; unit?: string; d?: number }): JSX.Element {
@@ -51,7 +52,7 @@ export default function Dashboard(): JSX.Element {
       <div className="grid g-main">
         <Card><CardHead title="Yarn production by count" sub="Ring-frame output, last 7 days (kg per day)" /><CardBody>
           <div style={{ height: 250 }}><ResponsiveContainer><BarChart data={prodDays} margin={{ top: 6, right: 8, left: -8, bottom: 0 }}><CartesianGrid stroke="hsl(var(--chart-grid))" vertical={false} /><XAxis dataKey="date" tick={{ fontSize: 11 }} stroke="hsl(var(--chart-axis))" /><YAxis tick={{ fontSize: 11 }} stroke="hsl(var(--chart-axis))" /><Tooltip contentStyle={{ background: 'hsl(var(--popover))', border: '1px solid hsl(var(--border))', borderRadius: 8, fontSize: 12 }} formatter={(v: number) => `${num(v, 0)} kg`} /><RLegend iconType="circle" wrapperStyle={{ fontSize: 12 }} />
-            {d.counts.filter((c) => sel(c.countId)).map((c, i) => <Bar key={c.countId} dataKey={c.display} stackId="a" fill={`hsl(var(${SERIES[i % 4]}))`} radius={i === d.counts.length - 1 ? [4, 4, 0, 0] : 0} />)}</BarChart></ResponsiveContainer></div></CardBody></Card>
+            {counts.map((c, i) => <Bar key={c.countId} dataKey={c.display} stackId="a" fill={c.colorTip?.hex ?? `hsl(var(${SERIES[i % SERIES.length]}))`} radius={i === counts.length - 1 ? [4, 4, 0, 0] : 0} />)}</BarChart></ResponsiveContainer></div></CardBody></Card>
         <Card><CardHead title="Work in process by stage" sub="Kg currently inside each department" /><CardBody className="stack tight">
           {k.wipByStage.map((w) => <div key={w.stage} className="row" style={{ gap: 10, flexWrap: 'nowrap' }}><span style={{ width: 112 }} className="row small"><StageIcon stage={w.stage} size={13} /> {w.label.replace(' (simplex)', '').replace(' (winding)', '')}</span><div className="bar grow"><i style={{ width: `${(w.kg / wipMax) * 100}%` }} /></div><span className="small nowrap" style={{ width: 92, textAlign: 'right' }}><b>{num(w.kg, 0)}</b> kg · {w.lots} lot{w.lots === 1 ? '' : 's'}</span></div>)}</CardBody></Card>
       </div>
