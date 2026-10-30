@@ -387,6 +387,14 @@ export async function openPostgresDatabase(
       );
       console.log('[DB] Verified test_results.sample_id column.');
 
+      // Older PostgreSQL deployments may have arrival_date as a required bale field,
+      // while the current application also keeps received_at for existing readers.
+      // Add/backfill the compatibility column before any new contract writes.
+      await db.exec('ALTER TABLE bales ADD COLUMN IF NOT EXISTS arrival_date TEXT');
+      await db.exec(`UPDATE bales SET arrival_date = COALESCE(NULLIF(arrival_date::TEXT, ''), NULLIF(received_at::DATE::TEXT, ''), NULLIF(created_at::DATE::TEXT, ''), CURRENT_DATE::TEXT) WHERE arrival_date IS NULL OR arrival_date::TEXT = ''`);
+      await db.exec('ALTER TABLE bales ALTER COLUMN arrival_date SET NOT NULL');
+      console.log('[DB] Verified bales.arrival_date column.');
+
     } catch (error) {
       console.error(
         '[DB] PostgreSQL schema initialization failed.'
