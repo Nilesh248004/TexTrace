@@ -14,13 +14,15 @@ export const AssetIdContract: ContractModule = {
   functions: {
     registerBale: {
       key: 'AssetID.registerBale', description: 'Register a bale into the bale store', rules: ['bale-no-unique', 'weight-positive', 'hvi-complete', 'bay-bin-present'],
-      async handler(ctx, args: { baleNo: string; supplier: string; station: string; variety: string; ginLot: string; weightKg: number; bay: string; bin: string; fibre: Record<string, number>; receivedAt?: string }) {
+      async handler(ctx, args: { baleNo: string; supplier: string; station: string; variety: string; ginLot: string; weightKg: number; bay: string; bin: string; fibre: Record<string, number>; receivedAt?: string; arrivalDate?: string }) {
         const no = String(args.baleNo ?? '').trim();
         ctx.check('bale-no-unique', !!no && !(await ctx.get('SELECT id FROM bales WHERE bale_no=?', no)), `Bale number ${no || '(blank)'} is missing or already registered`, 'CONFLICT');
         ctx.check('weight-positive', Number(args.weightKg) > 100 && Number(args.weightKg) < 300, 'Bale weight must be between 100 and 300 kg', 'VALIDATION_FAILED');
         ctx.check('hvi-complete', FIBRE_KEYS.every((k) => Number.isFinite(Number(args.fibre?.[k]))), `HVI data required: ${FIBRE_KEYS.join(', ')}`, 'VALIDATION_FAILED');
         ctx.check('bay-bin-present', !!args.bay?.trim() && !!args.bin?.trim() && !!args.supplier?.trim() && !!args.variety?.trim(), 'Supplier, variety, bay and bin are required', 'VALIDATION_FAILED');
-        const row = await ctx.insert('bale', { id: `BALE-${no}`, bale_no: no, supplier: args.supplier.trim(), station: args.station?.trim() ?? '', variety: args.variety.trim(), gin_lot: args.ginLot?.trim() ?? '', weight_kg: Number(args.weightKg), remaining_kg: Number(args.weightKg), received_at: args.receivedAt ?? ctx.timestamp, bay: args.bay.trim(), bin: args.bin.trim(), status: 'IN_STORE', issued_at: null, mix_id: null, fibre: JSON.stringify(args.fibre), created_at: ctx.timestamp });
+        const arrivalDate = args.arrivalDate ?? args.receivedAt ?? ctx.timestamp;
+        const receivedAt = args.receivedAt ?? arrivalDate;
+        const row = await ctx.insert('bale', { id: `BALE-${no}`, bale_no: no, supplier: args.supplier.trim(), station: args.station?.trim() ?? '', variety: args.variety.trim(), gin_lot: args.ginLot?.trim() ?? '', weight_kg: Number(args.weightKg), remaining_kg: Number(args.weightKg), received_at: receivedAt, arrival_date: arrivalDate, bay: args.bay.trim(), bin: args.bin.trim(), status: 'IN_STORE', issued_at: null, mix_id: null, fibre: JSON.stringify(args.fibre), created_at: ctx.timestamp });
         ctx.setPayload({ baleId: row.id, variety: args.variety, bay: args.bay, bin: args.bin, weightKg: args.weightKg });
         return row;
       },
