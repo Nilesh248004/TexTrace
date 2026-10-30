@@ -32,18 +32,19 @@ export function zeonRouter(c: ApiCtx, options: { llm?: ModelCall; speech?: Speec
   let realSpeech: SpeechCall | null = null;
   const speech = (): SpeechCall | null => options.speech ?? (config.gemini.enabled ? (realSpeech ??= geminiSpeech()) : null);
   const spoken = new Map<string, number[]>();
+  let voicePausedUntil = 0; // when Gemini says the speech quota is used up, stop asking for a minute: the browser's own voice takes over
 
   // POST /api/zeon/speak: the answer as natural speech (WAV, base64). The browser falls back to its own voice if this is unavailable.
   r.post('/zeon/speak', async (req: AuthedRequest, res) => {
     const text = clean((req.body as { text?: unknown } | undefined)?.text, 900);
     if (!text) return fail(res, 422, 'VALIDATION_FAILED', 'Nothing to say.');
     const say = speech();
-    if (!say) return ok(res, { configured: false });
+    if (!say || Date.now() < voicePausedUntil) return ok(res, { configured: false });
     const now = Date.now(); const recent = (spoken.get(req.actor!.id) ?? []).filter((t) => now - t < 60_000);
     if (recent.length >= config.zeon.perMinute * 6) return fail(res, 429, 'RATE_LIMITED', 'Too many spoken answers; please wait a moment.');
     spoken.set(req.actor!.id, [...recent, now]);
     try { const wav = await say(text); ok(res, { configured: true, mime: 'audio/wav', audio: wav.toString('base64') }); }
-    catch (error) { console.warn('[zeon] speech failed:', (error as { status?: number } | null)?.status ?? '', error instanceof Error ? error.message.replace(/AIza[\w-]+/g, '[key]').slice(0, 300) : ''); ok(res, { configured: false }); }
+    catch (error) { if ((error as { status?: number } | null)?.status === 429) voicePausedUntil = Date.now() + 60_000; console.warn('[zeon] speech failed:', (error as { status?: number } | null)?.status ?? '', error instanceof Error ? error.message.replace(/AIza[\w-]+/g, '[key]').slice(0, 300) : ''); ok(res, { configured: false }); }
   });
 
   r.post('/zeon/chat', async (req: AuthedRequest, res) => {

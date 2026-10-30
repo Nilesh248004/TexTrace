@@ -7,8 +7,9 @@ import type { ModelCall, ModelReply, ModelRequest, ModelTool, ToolCall, Turn } f
 /** Just the part of the client Zeon uses, so tests can hand in a fake. */
 export interface GenAiLike { models: { generateContent: (params: Record<string, unknown>) => Promise<GenerateContentResponse> } }
 
-const THINKING: Record<string, 'LOW' | 'MEDIUM' | 'HIGH'> = { low: 'LOW', medium: 'MEDIUM', high: 'HIGH', xhigh: 'HIGH', max: 'HIGH' };
-export const thinkingLevelFor = (effort: string): 'LOW' | 'MEDIUM' | 'HIGH' => THINKING[effort] ?? 'LOW';
+const THINKING: Record<string, 'MINIMAL' | 'LOW' | 'MEDIUM' | 'HIGH'> = { low: 'MINIMAL', medium: 'MEDIUM', high: 'HIGH', xhigh: 'HIGH', max: 'HIGH' };
+/** Zeon's lookups need almost no reasoning, and less thinking means a faster answer (and fewer timeouts). */
+export const thinkingLevelFor = (effort: string): 'MINIMAL' | 'LOW' | 'MEDIUM' | 'HIGH' => THINKING[effort] ?? 'MINIMAL';
 /** Gemini 2.5 models take a thinking budget (tokens); Gemini 3 models take a named level. Looking things up needs little thinking, which keeps answers quick. */
 const BUDGET: Record<string, number> = { low: 256, medium: 1024, high: 4096 };
 export const thinkingFor = (model: string, effort: string): Record<string, unknown> =>
@@ -88,8 +89,10 @@ export function geminiModel(client: GenAiLike = new GoogleGenAI({ apiKey: config
         } catch (error) {
           lastError = error;
           if (thinking && thinkingRejected(error)) { thinking = false; continue; } // this model has no thinking level: ask again without it
-          if (!transient(error) || i === models.length - 1) throw error;
-          break; // transient: move on to the next model
+          if (!transient(error)) throw error;
+          const status = Number((error as { status?: unknown } | null)?.status);
+          if (i === models.length - 1 && attempt === 0 && status !== 404) continue; // the last model (or the only one, mid-lookup): try once more before giving up
+          break; // otherwise move on to the next model
         }
       }
     }

@@ -34,15 +34,15 @@ export function plainForSpeech(text: string): string {
 }
 
 /** Splits speech into pieces: a short first piece so the voice can start quickly, then larger ones that are made while the first plays. */
-export function speechChunks(text: string, first = 110, rest = 320): string[] {
+export function speechChunks(text: string, first = 110, rest = 500, max = 3): string[] {
   const sentences = text.match(/[^.!?]+[.!?]+["')\]]*\s*|[^.!?]+$/g)?.map((x) => x.trim()).filter(Boolean) ?? [];
   const out: string[] = []; let cur = '';
   for (const s of sentences) {
     const limit = out.length === 0 ? first : rest;
-    if (cur && (cur + ' ' + s).length > limit) { out.push(cur); cur = s; } else cur = cur ? `${cur} ${s}` : s;
+    if (cur && (cur + ' ' + s).length > limit && out.length < max - 1) { out.push(cur); cur = s; } else cur = cur ? `${cur} ${s}` : s;
   }
   if (cur) out.push(cur);
-  return out.slice(0, 6).map((c) => c.slice(0, 600));
+  return out.map((c) => c.slice(0, 900)); // few pieces: the speech service has a small request quota
 }
 
 export type Block = { kind: 'p'; lines: string[] } | { kind: 'ul'; items: string[] };

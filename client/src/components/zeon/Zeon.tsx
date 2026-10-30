@@ -112,9 +112,9 @@ export default function Zeon(): JSX.Element | null {
     if (!speak || !canVoice() || !openRef.current) return;
     stopVoice();
     const token = voice.current.token; const words = plainForSpeech(text);
-    const fallback = () => {
+    const fallback = (spoken = words) => {
       if (!canSpeak() || voice.current.token !== token || !openRef.current) return;
-      const u = new SpeechSynthesisUtterance(words); u.lang = 'en-IN'; u.rate = SPEECH_SPEED; u.pitch = 1.03;
+      const u = new SpeechSynthesisUtterance(spoken); u.lang = 'en-IN'; u.rate = SPEECH_SPEED; u.pitch = 1.03;
       const v = bestVoice(); if (v) { u.voice = v; u.lang = v.lang; }
       window.speechSynthesis.speak(u);
     };
@@ -126,7 +126,7 @@ export default function Zeon(): JSX.Element | null {
       for (const [i, pending] of fetched.entries()) {
         const data = await pending;
         if (voice.current.token !== token || !openRef.current) return; // closed, muted or replaced while the voice was being made
-        if (!data?.configured || !data.audio || typeof Audio === 'undefined') { if (i === 0) return fallback(); return; }
+        if (!data?.configured || !data.audio || typeof Audio === 'undefined') return fallback(pieces.slice(i).join(' ')); // out of quota or failed: the browser's voice reads the rest
         const bytes = Uint8Array.from(atob(data.audio), (c) => c.charCodeAt(0));
         const url = URL.createObjectURL(new Blob([bytes], { type: data.mime ?? 'audio/wav' }));
         const audio = new Audio(url); audio.playbackRate = SPEECH_SPEED; audio.preservesPitch = true;
