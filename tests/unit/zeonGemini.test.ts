@@ -68,6 +68,11 @@ describe('Zeon on Gemini', () => {
       await expect(geminiModel(b.client)(request([{ role: 'user', text: 'q' }, { role: 'model', text: '', raw: {} }, { role: 'tool', results: [] }]))).rejects.toThrow(); expect(b.calls).toHaveLength(1);
     });
 
+    it('skips a model that is not available to the key (404) and tries the next', async () => {
+      const m = fake(apiError(404, 'no longer available to new users'), ok);
+      expect((await geminiModel(m.client)(request())).text).toBe('fine'); expect(m.calls.map((c) => c.model)).toEqual([config.zeon.model, config.zeon.fallbackModels[0]]);
+    });
+
     it('retries without a thinking level when the model rejects it, and does not retry real errors', async () => {
       const t = fake(apiError(400, 'Thinking level is not supported'), ok);
       await geminiModel(t.client)(request()); expect(t.calls[1].config).not.toHaveProperty('thinkingConfig');
