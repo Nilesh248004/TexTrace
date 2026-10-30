@@ -596,6 +596,149 @@ ${String(source.extracted_text).slice(0, 180000)}`;
   });
 
 
+  // Import only eligible bale records through the existing audited AssetID contract.
+  // Every source row is tracked in pdf_import_record_results, so retries are idempotent.
+  r.post('/pdf-import/:id/import-ready', async (req: AuthedRequest, res) => {
+    if (!req.actor || !['ADMIN', 'PRODUCTION'].includes(req.actor.role)) {
+      return fail(res, 403, 'PERMISSION_DENIED', 'Only Admin or Production staff can import eligible bale records.');
+    }
+
+    const job = await db.prepare(
+      'SELECT j.id, j.file_name AS "fileName", j.status, e.structured_json AS "structuredJson" FROM pdf_import_jobs j LEFT JOIN pdf_import_extractions e ON e.job_id=j.id WHERE j.id=?'
+    ).get<Row>(req.params.id);
+    if (!job) return notFound(res, 'PDF import');
+    if (typeof job.structuredJson !== 'string' || !job.structuredJson) {
+      return fail(res, 409, 'EXTRACTION_REQUIRED', 'Extract and save structured data before importing.');
+    }
+
+    let structured: Record<string, unknown>;
+    try {
+      structured = normalizePdfStructure(parseJson(job.structuredJson, null));
+    } catch {
+      return fail(res, 422, 'INVALID_STRUCTURED_DRAFT', 'The saved structured draft is invalid. Save corrections and revalidate first.');
+    }
+    if (job.status !== 'REVIEWED') {
+      return fail(res, 409, 'REVIEW_REQUIRED', 'Mark the PDF review complete before importing eligible records.');
+    }
+
+    const demoOnly =
+      structured.validationMode === 'DEMO_ONLY' &&
+      str(structured.datasetLabel) === 'TEXTRACE-DEMO-2026-10';
+    if (demoOnly && req.body?.confirmDemoData !== true) {
+      return fail(res, 409, 'DEMO_IMPORT_CONFIRMATION_REQUIRED', 'This is a synthetic demo dataset. Explicitly confirm demo-data import before writing any demo records.');
+    }
+    const rows = (structured.bales as unknown[]).filter(
+      (value): value is Row => !!value && typeof value === 'object' && !Array.isArray(value),
+    );
+    const now = nowIso();
+    const results: Array<{ sourceId: string; status: 'IMPORTED' | 'SKIPPED' | 'FAILED'; targetId?: string; message: string }> = [];
+
+    // Validate the whole candidate set against current data before attempting any writes.
+    const existing = new Set((await db.prepare('SELECT bale_no FROM bales').all<Row>()).map((row) => str(row.bale_no)));
+    const seen = new Set<string>();
+    for (const row of rows) {
+      const sourceId = str(row.baleNo).trim() || '(missing baleNo)';
+      const prior = await db.prepare(
+        'SELECT status, target_id AS "targetId", message FROM pdf_import_record_results WHERE job_id=? AND category=? AND source_id=?'
+      ).get<Row>(job.id, 'bales', sourceId);
+      if (prior?.status === 'IMPORTED') {
+        results.push({ sourceId, status: 'IMPORTED', targetId: str(prior.targetId), message: 'Already imported by this job; skipped safely on retry.' });
+        continue;
+      }
+
+      const fibre = row.fibre && typeof row.fibre === 'object' && !Array.isArray(row.fibre)
+        ? row.fibre as Record<string, unknown> : {};
+      const requiredFibre = ['MIC', 'UHML', 'UI', 'STR', 'SFI', 'TRASH', 'MOIST', 'RD', 'PLUS_B'];
+      const missingFibre = requiredFibre.filter((key) => typeof fibre[key] !== 'number' || !Number.isFinite(fibre[key] as number));
+      let reason = '';
+      if (!sourceId || sourceId === '(missing baleNo)') reason = 'Missing baleNo.';
+      else if (seen.has(sourceId)) reason = 'Duplicate baleNo in this PDF.';
+      else if (existing.has(sourceId)) reason = 'Bale number already exists in TexTrace.';
+      else if (!(Number(row.weightKg) > 100 && Number(row.weightKg) < 300)) reason = 'Weight is outside the contract range (>100 and <300 kg); confirm source units.';
+      else if (missingFibre.length) reason = 'Missing numeric HVI measurements: ' + missingFibre.join(', ') + '.';
+      else if (!str(row.supplier).trim() || !str(row.variety).trim() || !str(row.bay).trim() || !str(row.bin).trim()) reason = 'Supplier, variety, bay and bin are required.';
+      else if (str(row.status).toUpperCase() !== 'IN_STORE') reason = 'Historical status ' + str(row.status) + ' cannot safely be represented by the normal bale registration contract; preserved in staging.';
+      else if (row.fibreSource === 'SYNTHETIC_FOR_VALIDATION_ONLY' && !demoOnly) reason = 'Synthetic HVI values are only permitted for the explicitly labeled demo dataset.';
+      else if (row.syntheticForValidator === true && !demoOnly) reason = 'Synthetic helper records are only permitted for the explicitly labeled demo dataset.';
+      seen.add(sourceId);
+
+      if (reason) {
+        await db.prepare(
+          'INSERT INTO pdf_import_record_results (job_id,category,source_id,status,target_id,message,source_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(job_id,category,source_id) DO UPDATE SET status=excluded.status,target_id=excluded.target_id,message=excluded.message,source_json=excluded.source_json,updated_at=excluded.updated_at'
+        ).run(job.id, 'bales', sourceId, 'SKIPPED', null, reason, JSON.stringify(row), now, now);
+        results.push({ sourceId, status: 'SKIPPED', message: reason });
+        continue;
+      }
+
+      try {
+        const action = await c.runtime.run({
+          action: 'pdf-import.import-bale',
+          label: 'Import PDF bale ' + sourceId,
+          actor: req.actor,
+          request: { method: req.method, path: req.originalUrl.split('?')[0], query: req.query as Record<string, unknown>, body: { jobId: job.id, sourceId, demoOnly } },
+        }, async (x) => x.call<Row>('AssetID.registerBale', {
+          baleNo: sourceId,
+          supplier: str(row.supplier),
+          station: str(row.station),
+          variety: str(row.variety),
+          ginLot: str(row.ginLot),
+          weightKg: Number(row.weightKg),
+          bay: str(row.bay),
+          bin: str(row.bin),
+          fibre: fibre as Record<string, number>,
+          receivedAt: str(row.receivedAt) || undefined,
+        }));
+
+        if (!action.ok) {
+          const message = action.error?.message ?? 'Contract rejected the record.';
+          await db.prepare(
+            'INSERT INTO pdf_import_record_results (job_id,category,source_id,status,target_id,message,source_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(job_id,category,source_id) DO UPDATE SET status=excluded.status,target_id=excluded.target_id,message=excluded.message,source_json=excluded.source_json,updated_at=excluded.updated_at'
+          ).run(job.id, 'bales', sourceId, 'FAILED', null, message, JSON.stringify(row), now, now);
+          results.push({ sourceId, status: 'FAILED', message });
+          continue;
+        }
+
+        const target = action.result as Row;
+        const targetId = str(target.id) || 'BALE-' + sourceId;
+        await db.prepare(
+          'INSERT INTO pdf_import_record_results (job_id,category,source_id,status,target_id,message,source_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(job_id,category,source_id) DO UPDATE SET status=excluded.status,target_id=excluded.target_id,message=excluded.message,source_json=excluded.source_json,updated_at=excluded.updated_at'
+        ).run(job.id, 'bales', sourceId, 'IMPORTED', targetId, 'Imported through AssetID.registerBale; ledger and contract validation applied.', JSON.stringify(row), now, now);
+        existing.add(sourceId);
+        results.push({ sourceId, status: 'IMPORTED', targetId, message: 'Imported successfully through the existing business contract.' });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unexpected import error.';
+        await db.prepare(
+          'INSERT INTO pdf_import_record_results (job_id,category,source_id,status,target_id,message,source_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(job_id,category,source_id) DO UPDATE SET status=excluded.status,target_id=excluded.target_id,message=excluded.message,source_json=excluded.source_json,updated_at=excluded.updated_at'
+        ).run(job.id, 'bales', sourceId, 'FAILED', null, message, JSON.stringify(row), now, now);
+        results.push({ sourceId, status: 'FAILED', message });
+      }
+    }
+
+    const summary = {
+      attempted: rows.length,
+      imported: results.filter((item) => item.status === 'IMPORTED' && !item.message.startsWith('Already imported')).length,
+      alreadyImported: results.filter((item) => item.status === 'IMPORTED' && item.message.startsWith('Already imported')).length,
+      skipped: results.filter((item) => item.status === 'SKIPPED').length,
+      failed: results.filter((item) => item.status === 'FAILED').length,
+    };
+    res.setHeader('Cache-Control', 'no-store');
+    return ok(res, {
+      jobId: job.id,
+      fileName: str(job.fileName),
+      completedAt: now,
+      demoOnly,
+      scope: 'bales-only',
+      summary,
+      results,
+      notes: [
+        'Only bale receipts are imported by this first partial-import implementation; mixes, lots, stage runs, tests, packing, orders, dispatches and incidents remain in staging.',
+        'Each imported bale is written through AssetID.registerBale and the contract ledger. No raw SQL writes are made to production business tables.',
+        'Blocked or unsupported records are retained in the staging JSON and import-result audit table.',
+        'Demo-only mode does not bypass business contract checks or permit historical statuses to be misrepresented.',
+      ],
+    });
+  });
+
   // Read-only historical import preview. This deliberately does not write production records.
   r.post('/pdf-import/:id/import-preview', async (req: AuthedRequest, res) => {
     if (!req.actor || req.actor.role === 'BUYER') {

@@ -542,3 +542,20 @@ CREATE TABLE IF NOT EXISTS pdf_import_extractions (
 );
 CREATE INDEX IF NOT EXISTS idx_pdf_import_extractions_job
   ON pdf_import_extractions(job_id);
+
+-- Per-source-row import outcomes: supports safe retry without duplicating production records.
+CREATE TABLE IF NOT EXISTS pdf_import_record_results (
+  job_id TEXT NOT NULL REFERENCES pdf_import_jobs(id),
+  category TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  status TEXT NOT NULL, -- IMPORTED | SKIPPED | FAILED
+  target_id TEXT,
+  message TEXT NOT NULL DEFAULT '',
+  source_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (job_id, category, source_id)
+);
+CREATE INDEX IF NOT EXISTS idx_pdf_import_results_status
+  ON pdf_import_record_results(job_id, status, category);
+
