@@ -59,7 +59,8 @@ export function readReply(response: GenerateContentResponse): ModelReply {
   return text ? { text, toolCalls: [], outcome: 'answer', raw } : { text: '', toolCalls: [], outcome: 'empty' };
 }
 
-const transient = (e: unknown): boolean => [408, 429, 500, 502, 503, 504].includes(Number((e as { status?: unknown } | null)?.status));
+// 404 = this model name is not available to the key (retired or not enabled): another model may still work
+const transient = (e: unknown): boolean => [404, 408, 429, 500, 502, 503, 504].includes(Number((e as { status?: unknown } | null)?.status));
 const thinkingRejected = (e: unknown): boolean => Number((e as { status?: unknown } | null)?.status) === 400 && /think/i.test(String((e as Error | null)?.message ?? ''));
 
 /** The real model call. `client` can be replaced in tests. */
