@@ -1192,6 +1192,7 @@ export function generatePlan(seed = 20261028): Plan {
   // -- settings: mill profile + operating policy (millName / warnFraction are the editable ones; the rest are read-only profile values)
   const settings: Record<string, unknown> = {
     millName: 'Model Spinning Mill — Unit 1', warnFraction: 0.2, businessDate: TODAY, nowIso: config.seedNowIso,
+    demoLot: 'LOT-101', loginQuote: 'lot 101 has more hairiness',
     millAddress: 'SF 112/3, Mill Road, Palladam, Tiruppur District 641664', gstin: '33AABCM1234F1Z5', contactEmail: 'quality@modelspinning.example', timezone: 'Asia/Kolkata',
     shiftPattern: { A: '06:00–14:00', B: '14:00–22:00', C: '22:00–06:00' }, spindlesInstalled: 25920, complaintSlaHours: { acknowledge: 4, close: 72 },
     ledgerBlockPolicy: 'One block per production day, 3-of-4 validator approvals', dataRetentionYears: 8,

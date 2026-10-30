@@ -38,6 +38,25 @@ export function defineSuite(name: string, open: () => Promise<DB>, skip = false)
       expect(overview.counts.map((c: { completeness: { overall: number } }) => c.completeness.overall)).toEqual([100, 100, 100, 100, 100, 100, 99.5, 96.7, 100, 100]); // by Ne: 16s 20s 24CH 30CH 30CP 34CH 40CH 40CP 50CP 60CP (40CH / 40CP keep their deliberate gaps)
     });
 
+    it('builds the public sign-in screen from the database, not from the UI', async () => {
+      const read = async () => (await request(app).get('/api/auth/demo-context').expect(200)).body.data; // public: no sign-in
+      const setting = async (key: string) => JSON.parse((await db.prepare('SELECT value FROM settings WHERE key=?').get<{ value: string }>(key))!.value) as string;
+      const seeded = await read();
+      expect(seeded.millName).toBe(await setting('millName'));
+      expect(seeded.lot).toMatchObject({ lotNo: '101', quote: 'lot 101 has more hairiness', deviation: 'Machine' });
+      expect(seeded.lot.steps.map((x: { label: string }) => x.label)).toEqual(['Bale', 'Mix', 'Machine', 'Test', 'Packing', 'Dispatch']);
+      // edit the settings table and the screen follows
+      const [mill, lot] = [await setting('millName'), await setting('demoLot')];
+      await db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify('Renamed Mill'), 'millName');
+      await db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify('LOT-110'), 'demoLot');
+      const changed = await read();
+      expect(changed.millName).toBe('Renamed Mill'); expect(changed.lot.lotNo).toBe('110');
+      expect((await request(app).get('/api/health')).body.data.millName).toBe('Renamed Mill');
+      expect((await request(app).get('/api/meta')).body.data.millName).toBe('Renamed Mill');
+      await db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify(mill), 'millName');
+      await db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify(lot), 'demoLot');
+    });
+
     it('answers a customer question about lot 101 on one screen', async () => {
       const p = (await get('qa', '/api/lots/101/passport')).body.data;
       expect(p.dispatch).toMatchObject({ vehicleNo: 'TN-39-AB-4521', invoiceNo: 'INV/26-27/0412', transporter: 'SRM Roadways', customerName: 'PD Textiles' });

@@ -53,11 +53,11 @@ function PackForm({ onClose }: { onClose: () => void }): JSX.Element {
   </Modal>;
 }
 
-function slip(p: Pack): void {
+function slip(p: Pack, millName: string): void {
   const w = window.open('', '_blank', 'width=720,height=860');
   if (!w) return;
   w.document.write(`<html><head><title>Packing slip ${p.slipNo}</title><style>body{font-family:Inter,Arial,sans-serif;padding:28px;color:#111}h1{font-size:20px;margin:0}table{border-collapse:collapse;width:100%;margin-top:14px}td,th{border:1px solid #bbb;padding:7px 10px;text-align:left;font-size:13px}th{background:#f1f1f1;width:38%}.sw{display:inline-block;width:14px;height:14px;border-radius:50%;background:${p.colorHex ?? '#ccc'};border:1px solid #888;vertical-align:-2px}</style></head><body>
-    <h1>Packing slip ${p.slipNo}</h1><div>Model Spinning Mill — Unit 1 · packed ${fmtDT(p.packedAt)} IST by ${p.packer}</div>
+    <h1>Packing slip ${p.slipNo}</h1><div>${millName} · packed ${fmtDT(p.packedAt)} IST by ${p.packer}</div>
     <table><tr><th>Lot / count</th><td>${p.lotNo} · ${p.countDisplay}</td></tr><tr><th>Package</th><td>${p.packageType.toLowerCase()} · ${p.cones} cones in ${p.cartons} cartons${p.partialCones ? ` (last carton ${p.partialCones} cones)` : ''}</td></tr>
     <tr><th>Cartons</th><td>${p.cartonFrom} to ${p.cartonTo}</td></tr><tr><th>Net / tare / gross</th><td>${num(p.netKg, 1)} / ${num(p.tareKg, 1)} / ${num(p.grossKg, 1)} kg</td></tr><tr><th>Average cone weight</th><td>${p.avgConeKg} kg</td></tr>
     <tr><th>Cone colour</th><td><span class="sw"></span> ${p.colorActual} (master ${p.colorMaster}) — ${p.colorOk ? 'VERIFIED' : 'MISMATCH'}</td></tr><tr><th>Label template</th><td>${p.labelTemplate}</td></tr><tr><th>FG store</th><td>${p.fgLocation}</td></tr></table>
@@ -67,7 +67,7 @@ function slip(p: Pack): void {
 
 export default function Accessories(): JSX.Element {
   const { count, mode } = useGlobalParams(); const user = useSession((s) => s.user); const [sp] = useSearchParams();
-  const [tab, setTab] = useState<Tab>((sp.get('tab') as Tab) ?? 'accessories'); const [change, setChange] = useState(false); const [packForm, setPackForm] = useState(false); const [slipOf, setSlipOf] = useState<Pack | null>(null);
+  const mill = useGet<{ millName: string }>('/api/meta'); const [tab, setTab] = useState<Tab>((sp.get('tab') as Tab) ?? 'accessories'); const [change, setChange] = useState(false); const [packForm, setPackForm] = useState(false); const [slipOf, setSlipOf] = useState<Pack | null>(null);
   const accs = useGet<Acc[]>('/api/accessories'); const changes = useGet<Change[]>('/api/accessory-changes'); const packs = useGet<Pack[]>('/api/packing' + qstr({ count, mode })); const colors = useGet<ColorRow[]>('/api/color-codes');
   const ov = useGet<{ counts: { id: string; display: string; versions: MasterVersionDTO[] }[] }>('/api/masters/overview');
   const canChange = !!user && ['ADMIN', 'PRODUCTION'].includes(user.role); const canPack = !!user && ['ADMIN', 'PRODUCTION', 'DISPATCH'].includes(user.role);
@@ -114,7 +114,7 @@ export default function Accessories(): JSX.Element {
       <div className="grid g2"><Fact2 l="Lot / count" v={`${slipOf.lotNo} · ${slipOf.countDisplay}`} /><Fact2 l="Packed" v={`${fmtDT(slipOf.packedAt)} by ${slipOf.packer}`} /><Fact2 l="Package" v={`${slipOf.packageType.toLowerCase()} · ${slipOf.cones} cones in ${slipOf.cartons} cartons${slipOf.partialCones ? ` (last carton ${slipOf.partialCones} cones)` : ''}`} /><Fact2 l="Cartons" v={`${slipOf.cartonFrom} → ${slipOf.cartonTo}`} /><Fact2 l="Net / tare / gross" v={`${num(slipOf.netKg, 1)} / ${num(slipOf.tareKg, 1)} / ${num(slipOf.grossKg, 1)} kg`} /><Fact2 l="FG store" v={slipOf.fgLocation} /></div>
       <div className="row"><Swatch hex={slipOf.colorHex} name={`${slipOf.colorActual}`} />{slipOf.colorOk ? <ColorPill color="green" label="Colour verified against master" /> : <ColorPill color="red" label={`Mismatch — master is ${slipOf.colorMaster}`} />}</div>
       <div className="tbl-wrap"><table className="tbl dense"><thead><tr><th>Check</th><th className="num">Actual</th><th className="num">Master</th><th className="num">Range</th></tr></thead><tbody>{slipOf.checks.map((j) => <tr key={j.key}><td>{j.label} <span className="muted tiny">{j.unit}</span></td><td className="num"><J j={j} /></td><td className="num">{j.std}</td><td className="num muted">{j.lower ?? '–'} … {j.upper ?? '–'}</td></tr>)}</tbody></table></div>
-      <div className="row"><ChainBadge chain={slipOf.chain} /><button className="btn" onClick={() => slip(slipOf)}><Printer size={14} /> Print packing slip</button><Link className="btn" to={`/lots/${slipOf.lotId}`}>Lot passport</Link></div></div></Drawer> : null}
+      <div className="row"><ChainBadge chain={slipOf.chain} /><button className="btn" onClick={() => slip(slipOf, mill.data?.millName ?? '')}><Printer size={14} /> Print packing slip</button><Link className="btn" to={`/lots/${slipOf.lotId}`}>Lot passport</Link></div></div></Drawer> : null}
     {change ? <ChangeForm onClose={() => setChange(false)} accs={accs.data ?? []} /> : null}
     {packForm ? <PackForm onClose={() => setPackForm(false)} /> : null}
   </div>;

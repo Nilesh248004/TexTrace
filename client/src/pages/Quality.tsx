@@ -26,7 +26,7 @@ export default function Quality(): JSX.Element {
   const head = (r: Test) => { const keys = HEADLINE[r.stage] ?? []; const picked = keys.map((k) => r.values.find((v) => v.key === k)).filter((v): v is Judged => !!v); return picked.length ? picked : r.values.slice(0, 4); };
   const cols: Col<Test>[] = [
     { key: 'at', header: 'Tested at', value: (r) => r.testedAt, render: (r) => <span className="nowrap">{fmtDTShort(r.testedAt)}<span className="sub">shift {r.shift}</span></span> },
-    { key: 'sample', header: 'Sample', value: (r) => r.sampleId, render: (r) => <span className="mono small">{r.sampleId}</span> },
+    { key: 'sample', header: 'Sample', value: (r) => r.sampleId, render: (r) => <span className="mono small nowrap">{r.sampleId}</span> },
     { key: 'lot', header: 'Lot', value: (r) => r.lotNo, render: (r) => <Link to={`/lots/${r.lotId}`} onClick={(e) => e.stopPropagation()} className="bold">{r.lotNo}<span className="sub">{r.countDisplay}</span></Link> },
     { key: 'stage', header: 'Department', value: (r) => r.stageLabel, render: (r) => <span className="row" style={{ gap: 6, flexWrap: 'nowrap' }}><StageIcon stage={r.stage} size={14} />{r.stageLabel}</span> },
     { key: 'machine', header: 'Machine', value: (r) => `${r.machineLabel}${r.pos ? ` ${r.pos}` : ''}`, render: (r) => <span>{r.type === 'LOT' ? <Pill tone="blue">Lot composite</Pill> : r.machineLabel}{r.pos && r.type === 'MACHINE' ? <span className="sub">{r.pos}</span> : null}</span> },
