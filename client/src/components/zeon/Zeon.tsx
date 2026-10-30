@@ -17,6 +17,14 @@ type RecognitionCtor = new () => RecognitionLike;
 
 const recognitionCtor = (): RecognitionCtor | null => (typeof window === 'undefined' ? null : ((window as unknown as { SpeechRecognition?: RecognitionCtor; webkitSpeechRecognition?: RecognitionCtor }).SpeechRecognition ?? (window as unknown as { webkitSpeechRecognition?: RecognitionCtor }).webkitSpeechRecognition ?? null));
 const canSpeak = (): boolean => typeof window !== 'undefined' && 'speechSynthesis' in window && typeof SpeechSynthesisUtterance !== 'undefined';
+const canVoice = (): boolean => typeof window !== 'undefined' && (typeof Audio !== 'undefined' || canSpeak());
+
+/** The most natural-sounding English voice this browser has (the built-in fallback; the server's Gemini voice is used first). */
+function bestVoice(): SpeechSynthesisVoice | undefined {
+  const english = window.speechSynthesis.getVoices().filter((v) => /^en[-_]/i.test(v.lang));
+  const rank = (v: SpeechSynthesisVoice) => (/natural|neural|online/i.test(v.name) ? 4 : 0) + (/google/i.test(v.name) ? 3 : 0) + (/samantha|aria|jenny|sonia|neerja|libby|serena|karen|moira/i.test(v.name) ? 2 : 0) + (/^en[-_]IN/i.test(v.lang) ? 1 : 0);
+  return english.sort((a, b) => rank(b) - rank(a))[0];
+}
 
 // remembered per browser; every access is guarded because storage can be blocked
 const read = <T,>(key: string, fallback: T): T => { try { const v = localStorage.getItem(key); return v === null ? fallback : (JSON.parse(v) as T); } catch { return fallback; } };
@@ -59,12 +67,24 @@ export default function Zeon(): JSX.Element | null {
   const route = `${loc.pathname}${loc.search}`;
   const suggestions = useMemo(() => suggestionsFor(role, route), [role, route]);
 
+  // ---- voice: Gemini speaks the answer (natural, with feeling); the browser's own voice is the fallback
+  const voice = useRef<{ token: number; audio: HTMLAudioElement | null; url: string | null }>({ token: 0, audio: null, url: null });
+  const stopVoice = () => {
+    const v = voice.current; v.token++;
+    if (v.audio) { v.audio.pause(); v.audio = null; }
+    if (v.url) { URL.revokeObjectURL(v.url); v.url = null; }
+    if (canSpeak()) window.speechSynthesis.cancel();
+  };
+
   // tell the page the panel is open, so the ledger confirmations can step aside
   useEffect(() => { document.documentElement.classList.toggle('zeon-open', open); return () => document.documentElement.classList.remove('zeon-open'); }, [open]);
-  useEffect(() => { write('zeon.speak', speak); if (!speak && canSpeak()) window.speechSynthesis.cancel(); }, [speak]);
+  useEffect(() => { write('zeon.speak', speak); if (!speak) stopVoice(); }, [speak]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { endRef.current?.scrollIntoView({ block: 'end' }); }, [msgs, busy, open]);
   useEffect(() => { if (open) inputRef.current?.focus(); }, [open]);
-  useEffect(() => () => { rec.current?.abort(); if (canSpeak()) window.speechSynthesis.cancel(); }, []);
+  // closing the panel silences Zeon and stops the microphone; an answer that arrives after closing is not read out
+  const openRef = useRef(false);
+  useEffect(() => { openRef.current = open; if (!open) { rec.current?.abort(); stopVoice(); } }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => { rec.current?.abort(); stopVoice(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // a refused action is the moment people most need help: remember it, and offer to explain
   useEffect(() => {
@@ -83,17 +103,32 @@ export default function Zeon(): JSX.Element | null {
       : `Hi ${first}, I'm Zeon. Ask me about lots, results, complaints or how to do something in TexTrace. I'll answer for your role (${role ? ROLE_LABEL[role] : ''}).`;
   }, [user, role]);
 
-  const say = useCallback((text: string) => {
-    if (!speak || !canSpeak()) return;
-    window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(plainForSpeech(text)); u.lang = 'en-IN'; u.rate = 1;
-    window.speechSynthesis.speak(u);
+  const say = useCallback(async (text: string) => {
+    if (!speak || !canVoice() || !openRef.current) return;
+    stopVoice();
+    const token = voice.current.token; const words = plainForSpeech(text);
+    const fallback = () => {
+      if (!canSpeak() || voice.current.token !== token || !openRef.current) return;
+      const u = new SpeechSynthesisUtterance(words); u.lang = 'en-IN'; u.rate = 0.97; u.pitch = 1.03;
+      const v = bestVoice(); if (v) { u.voice = v; u.lang = v.lang; }
+      window.speechSynthesis.speak(u);
+    };
+    try {
+      const { data } = await request<{ configured: boolean; mime?: string; audio?: string }>('POST', '/api/zeon/speak', { text: words });
+      if (voice.current.token !== token || !openRef.current) return; // closed, muted or replaced while the voice was being made
+      if (!data.configured || !data.audio || typeof Audio === 'undefined') return fallback();
+      const bytes = Uint8Array.from(atob(data.audio), (c) => c.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes], { type: data.mime ?? 'audio/wav' }));
+      const audio = new Audio(url); voice.current.audio = audio; voice.current.url = url;
+      audio.onended = () => { if (voice.current.audio === audio) { URL.revokeObjectURL(url); voice.current.audio = null; voice.current.url = null; } };
+      await audio.play();
+    } catch { fallback(); }
   }, [speak]);
 
   const send = useCallback(async (raw?: string) => {
     const text = (raw ?? input).trim();
     if (!text || busy) return;
-    if (canSpeak()) window.speechSynthesis.cancel();
+    stopVoice();
     setNudge(''); setVoiceNote(''); setInput('');
     const mine: Msg = { id: ++seq.current, role: 'user', text };
     const history: ZeonMessage[] = [...msgs, mine].filter((m) => !m.error).slice(-12).map((m) => ({ role: m.role, content: m.text }));
@@ -103,7 +138,7 @@ export default function Zeon(): JSX.Element | null {
     try {
       const { data } = await request<ZeonChatResponse>('POST', '/api/zeon/chat', { messages: history, context: { route, title, lastError: err } });
       setMsgs((m) => [...m, { id: ++seq.current, role: 'assistant', text: data.reply, actions: data.actions }]);
-      say(data.reply);
+      void say(data.reply);
     } catch (e) {
       setMsgs((m) => [...m, { id: ++seq.current, role: 'assistant', error: true, text: e instanceof ApiError && e.status === 429 ? e.message : 'I could not reach the server just now. Please try again.' }]);
     } finally { setBusy(false); }
@@ -115,7 +150,7 @@ export default function Zeon(): JSX.Element | null {
   const toggleListen = () => {
     if (!Listen) return;
     if (listening) { rec.current?.stop(); return; }
-    if (canSpeak()) window.speechSynthesis.cancel();
+    stopVoice();
     setVoiceNote('');
     const r = new Listen(); rec.current = r; r.lang = 'en-IN'; r.interimResults = true; r.continuous = false;
     r.onresult = (e) => {
@@ -149,7 +184,7 @@ export default function Zeon(): JSX.Element | null {
       <header className="zeon-head">
         <span className="zeon-orb sm" aria-hidden="true"><Zap size={15} /></span>
         <span className="zeon-title"><b>Zeon</b><small>Answering as {role ? ROLE_LABEL[role] : ''}</small></span>
-        <button type="button" className="zeon-ico" onClick={() => setSpeak((v) => !v)} aria-pressed={speak} aria-label={speak ? 'Stop reading answers aloud' : 'Read answers aloud'} title={speak ? 'Reading answers aloud' : 'Read answers aloud'} disabled={!canSpeak()} data-testid="zeon-speak">{speak ? <Volume2 size={16} /> : <VolumeX size={16} />}</button>
+        <button type="button" className="zeon-ico" onClick={() => setSpeak((v) => !v)} aria-pressed={speak} aria-label={speak ? 'Stop reading answers aloud' : 'Read answers aloud'} title={speak ? 'Reading answers aloud' : 'Read answers aloud'} disabled={!canVoice()} data-testid="zeon-speak">{speak ? <Volume2 size={16} /> : <VolumeX size={16} />}</button>
         <button type="button" className="zeon-ico" onClick={() => { setMsgs([]); setHandled({}); lastError.current = null; }} aria-label="Start a new conversation" title="New conversation" disabled={empty}><RotateCcw size={15} /></button>
         <button type="button" className="zeon-ico" onClick={() => setOpen(false)} aria-label="Close Zeon" data-testid="zeon-close"><X size={17} /></button>
       </header>

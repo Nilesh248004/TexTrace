@@ -6,6 +6,7 @@ import { nowIso } from '../lib/clock';
 import { runZeon } from '../zeon/chat';
 import { friendlyError, geminiModel } from '../zeon/gemini';
 import type { ModelCall } from '../zeon/model';
+import { geminiSpeech, type SpeechCall } from '../zeon/speech';
 import { fail, newRouter, ok, type ApiCtx, type AuthedRequest } from './common';
 
 const MAX_MESSAGES = 14;
@@ -23,10 +24,27 @@ export const resetZeonLimits = (): void => hits.clear();
 
 const clean = (v: unknown, max: number): string => (typeof v === 'string' ? v : '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').trim().slice(0, max);
 
-export function zeonRouter(c: ApiCtx, options: { llm?: ModelCall } = {}) {
+export function zeonRouter(c: ApiCtx, options: { llm?: ModelCall; speech?: SpeechCall } = {}) {
   const r = newRouter();
   let real: ModelCall | null = null;
   const model = (): ModelCall | null => options.llm ?? (config.gemini.enabled ? (real ??= geminiModel()) : null);
+
+  let realSpeech: SpeechCall | null = null;
+  const speech = (): SpeechCall | null => options.speech ?? (config.gemini.enabled ? (realSpeech ??= geminiSpeech()) : null);
+  const spoken = new Map<string, number[]>();
+
+  // POST /api/zeon/speak: the answer as natural speech (WAV, base64). The browser falls back to its own voice if this is unavailable.
+  r.post('/zeon/speak', async (req: AuthedRequest, res) => {
+    const text = clean((req.body as { text?: unknown } | undefined)?.text, 900);
+    if (!text) return fail(res, 422, 'VALIDATION_FAILED', 'Nothing to say.');
+    const say = speech();
+    if (!say) return ok(res, { configured: false });
+    const now = Date.now(); const recent = (spoken.get(req.actor!.id) ?? []).filter((t) => now - t < 60_000);
+    if (recent.length >= config.zeon.perMinute * 2) return fail(res, 429, 'RATE_LIMITED', 'Too many spoken answers; please wait a moment.');
+    spoken.set(req.actor!.id, [...recent, now]);
+    try { const wav = await say(text); ok(res, { configured: true, mime: 'audio/wav', audio: wav.toString('base64') }); }
+    catch (error) { console.warn('[zeon] speech failed:', (error as { status?: number } | null)?.status ?? '', error instanceof Error ? error.message.replace(/AIza[\w-]+/g, '[key]').slice(0, 300) : ''); ok(res, { configured: false }); }
+  });
 
   r.post('/zeon/chat', async (req: AuthedRequest, res) => {
     const actor = req.actor!;
@@ -62,7 +80,9 @@ export function zeonRouter(c: ApiCtx, options: { llm?: ModelCall } = {}) {
       const response: ZeonChatResponse = { ...out, configured: true };
       ok(res, response);
     } catch (error) {
-      console.warn('[zeon] request failed:', error instanceof Error ? error.constructor.name : 'error');
+      const status = (error as { status?: number } | null)?.status;
+      const detail = error instanceof Error ? error.message.replace(/AIza[\w-]+/g, '[key]').slice(0, 400) : '';
+      console.warn('[zeon] request failed:', error instanceof Error ? error.constructor.name : 'error', status ?? '', detail);
       ok(res, { reply: friendlyError(error), actions: [], configured: true } satisfies ZeonChatResponse);
     }
   });
