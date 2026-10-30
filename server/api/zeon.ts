@@ -40,7 +40,7 @@ export function zeonRouter(c: ApiCtx, options: { llm?: ModelCall; speech?: Speec
     const say = speech();
     if (!say) return ok(res, { configured: false });
     const now = Date.now(); const recent = (spoken.get(req.actor!.id) ?? []).filter((t) => now - t < 60_000);
-    if (recent.length >= config.zeon.perMinute * 2) return fail(res, 429, 'RATE_LIMITED', 'Too many spoken answers; please wait a moment.');
+    if (recent.length >= config.zeon.perMinute * 6) return fail(res, 429, 'RATE_LIMITED', 'Too many spoken answers; please wait a moment.');
     spoken.set(req.actor!.id, [...recent, now]);
     try { const wav = await say(text); ok(res, { configured: true, mime: 'audio/wav', audio: wav.toString('base64') }); }
     catch (error) { console.warn('[zeon] speech failed:', (error as { status?: number } | null)?.status ?? '', error instanceof Error ? error.message.replace(/AIza[\w-]+/g, '[key]').slice(0, 300) : ''); ok(res, { configured: false }); }
