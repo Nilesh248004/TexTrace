@@ -778,7 +778,7 @@ export function generatePlan(seed = 20261028): Plan {
     }
     rows.push({
       type: 'bale',
-      row: { id: b.id, bale_no: String(b.no), supplier: b.supplier, station: b.station, variety: b.variety, gin_lot: b.ginLot, weight_kg: b.kg, remaining_kg: b.kg, received_at: iso(b.recv), arrival_date: iso(b.recv), bay: b.bay, bin: b.bin, status: 'IN_STORE', issued_at: null, mix_id: null, fibre: JSON.stringify(b.fibre), created_at: iso(b.recv) },
+      row: { id: b.id, bale_no: String(b.no), supplier: b.supplier, station: b.station, variety: b.variety, gin_lot: b.ginLot, weight_kg: b.kg, remaining_kg: b.kg, received_at: iso(b.recv), arrival_date: iso(b.recv).slice(0, 10), bay: b.bay, bin: b.bin, status: 'IN_STORE', issued_at: null, mix_id: null, fibre: JSON.stringify(b.fibre), created_at: iso(b.recv) },
       at: iso(b.recv), actor: BALE_ACTOR, contract: 'AssetID', fn: 'registerBale', label: `Receive bale ${b.no} (${b.variety}) into ${b.bay} / ${b.bin}`, method: 'POST', path: '/api/bales', history,
     });
   }
