@@ -71,6 +71,11 @@ try {
   assert.ok(/Sri Venkateswara/.test(ws) || /M-001/.test(ws), 'analysis should name the mix / supplier as contributory');
   await shot('10-ai-analysis', true);
 
+  // the QA conclusion arrives already drafted from the analysis; the QA head reviews and edits
+  await page.getByTestId('conclusion-drafted').waitFor({ timeout: 10000 });
+  const drafted = await page.getByLabel(/root cause/i).first().inputValue();
+  assert.ok(/RF.?6/.test(drafted), 'the QA conclusion should already be drafted from the analysis and name RF 6');
+  assert.ok((await page.getByLabel(/customer reply/i).first().inputValue()).startsWith('Dear PD Textiles'), 'the customer reply should be drafted for the customer');
   console.log('4. QA head writes the conclusion and closes the complaint');
   await page.getByLabel(/root cause/i).first().fill('RF-6 ran above the spindle-speed master (19,800 vs 18,200 rpm) with a 30-day-old traveller until 21 Oct; mix M-001 had a high short-fibre index (9.4%).');
   await page.getByLabel(/corrective/i).first().fill('Spindle speed reset and traveller replaced on 21 Oct; unshipped stock of lots 102, 110-112 held and customers contacted; replacement cartons offered to PD Textiles.');

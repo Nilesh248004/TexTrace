@@ -35,9 +35,19 @@ export const config = {
       return !!this.apiKey;
     },
   },
+  /** Zeon, the in-app assistant. It reuses the `ai` settings above (key, model, timeout, fallbacks); these only tune the chat. */
+  zeon: {
+    effort: (process.env.ZEON_EFFORT ?? 'low') as 'low' | 'medium' | 'high' | 'xhigh' | 'max',
+    maxSteps: num(process.env.ZEON_MAX_STEPS, 6),
+    perMinute: num(process.env.ZEON_PER_MINUTE, 12),
+    perDay: num(process.env.ZEON_PER_DAY, 300),
+    timeoutMs: num(process.env.ZEON_TIMEOUT_MS, 30000),
+  },
   gemini: {
     apiKey: process.env.Gemini_API_KEY ?? '',
     model: process.env.GEMINI_MODEL ?? 'gemini-3.8-flash',
+    /** tried in order when the main model is overloaded */
+    fallbackModels: ['gemini-3.6-flash', 'gemini-3.5-flash-lite'],
     get enabled(): boolean {
       return !!this.apiKey;
     },

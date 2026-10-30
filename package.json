@@ -17,7 +17,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "e2e": "tsx tests/e2e/demo.e2e.ts"
+    "e2e": "tsx tests/e2e/demo.e2e.ts",
+    "e2e:zeon": "tsx tests/e2e/zeon.e2e.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.135.0",

@@ -23,7 +23,7 @@ export default function PortalReport(): JSX.Element {
   const [lotText, setLotText] = useState(initialLot ? `Lot ${initialLot}` : '');
   const [lot, setLot] = useState<LotSearchHit | null>(null);
   const [type, setType] = useState<ComplaintType | null>(initialType);
-  const [desc, setDesc] = useState('');
+  const [desc, setDesc] = useState(() => (sp.get('desc') ?? '').slice(0, 500));
   const [file, setFile] = useState<File | null>(null);
   const [fileIssue, setFileIssue] = useState('');
   const [uploadIssue, setUploadIssue] = useState('');

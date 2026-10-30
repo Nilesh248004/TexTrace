@@ -8,6 +8,7 @@ import type { Alert, Heatmap, OwnerDashboard } from '@shared/domain';
 import { ColorPill, Card, CardBody, CardHead, ColorIcon, Kpi, Legend, Loading, PageHead, Pill, StageIcon, type Color } from '../components/ui';
 import { fmtDT, kg, num, pct } from '../lib/fmt';
 import { MiniHeat } from '../components/dash/MiniHeat';
+import { useCan } from '../components/masters/common';
 
 // fallback only: each count's bar uses its own cone-tip colour so the chart matches the swatch on its card
 const SERIES = ['--series-1', '--series-2', '--series-3', '--series-4', '--series-5', '--series-6', '--series-7'];
@@ -18,12 +19,12 @@ function Vs({ actual, master, color, unit = '%', d = 1 }: { actual: number | nul
 }
 
 export default function Dashboard(): JSX.Element {
-  const { count } = useGlobalParams(); const nav = useNavigate(); const judge = useUi((s) => s.judge); void judge;
+  const { count } = useGlobalParams(); const nav = useNavigate(); const reg = useCan('Quality.registerComplaint'); const judge = useUi((s) => s.judge); void judge;
   const q = useGet<OwnerDashboard>('/api/dashboard/owner');
   const heatQ = (parameter: string) => '/api/analytics/heatmap' + qstr({ stage: 'RF', parameter, days: 14, count });
   const hU = useGet<Heatmap>(heatQ('U')); const hH = useGet<Heatmap>(heatQ('H')); const hC = useGet<Heatmap>(heatQ('COUNT_CV'));
   return <div className="page" data-testid="owner-dashboard">
-    <PageHead eyebrow={q.data ? `${new Date(`${q.data.businessDate}T06:00:00+05:30`).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' }).toUpperCase()}` : 'MILL OWNER VIEW'} title="Mill dashboard" sub={q.data ? `As of ${fmtDT(q.data.asOf)} IST · every figure is judged against the active masters and anchored on the ledger.` : ''} right={<><Link className="btn" to="/live"><Boxes size={15} /> Where is every lot?</Link><Link className="btn primary" to="/complaints/new"><ClipboardList size={15} /> Register complaint</Link></>} />
+    <PageHead eyebrow={q.data ? `${new Date(`${q.data.businessDate}T06:00:00+05:30`).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' }).toUpperCase()}` : 'MILL OWNER VIEW'} title="Mill dashboard" sub={q.data ? `As of ${fmtDT(q.data.asOf)} IST · every figure is judged against the active masters and anchored on the ledger.` : ''} right={<><Link className="btn" to="/live"><Boxes size={15} /> Where is every lot?</Link>{reg.can ? <Link className="btn primary" to="/complaints/new"><ClipboardList size={15} /> Register complaint</Link> : null}</>} />
     <Loading q={q}>{q.data ? (() => { const d = q.data; const k = d.kpis; const sel = (id: string) => count === 'ALL' || count === id; const counts = d.counts.filter((c) => sel(c.countId));
       const prodDays = k.production7d.map((x) => ({ date: new Date(`${x.date}T06:00:00+05:30`).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', timeZone: 'Asia/Kolkata' }), ...Object.fromEntries(d.counts.map((c) => [c.display, x.byCount[c.countId] ?? 0])) }));
       const wipMax = Math.max(1, ...k.wipByStage.map((w) => w.kg));

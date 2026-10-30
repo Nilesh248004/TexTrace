@@ -376,8 +376,15 @@
   @media (prefers-reduced-motion: reduce) { .persona, .login-go, .login-tabs button { transition: none; } .trace-steps .warn .node { animation: none; } }
   .portal-hero { background: linear-gradient(120deg, hsl(var(--primary) / .12), hsl(var(--chain) / .1)); border: 1px solid hsl(var(--border)); border-radius: 16px; padding: 22px 24px; }
   .tip-i { display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: 50%; border: 1px solid hsl(var(--muted-foreground) / .6); color: hsl(var(--muted-foreground)); font-size: 10px; font-weight: 700; cursor: help; vertical-align: 1px; margin-left: 4px; }
-  .tracebar { position: fixed; right: 18px; bottom: 18px; z-index: 90; display: flex; flex-direction: column; gap: 8px; max-width: 420px; }
-  .tracecard { background: hsl(var(--card)); border: 1px solid hsl(var(--chain) / .5); border-radius: 12px; padding: 10px 14px; box-shadow: 0 12px 40px hsl(0 0% 0% / .25); font-size: 12.5px; }
+  /* ledger confirmations: compact, short-lived, and never in the way — details open on hover, and every page leaves room to scroll clear of them */
+  .tracebar { position: fixed; right: 18px; bottom: 124px; z-index: 90; display: flex; flex-direction: column; gap: 8px; width: min(380px, calc(100vw - 36px)); pointer-events: none; }
+  .page { padding-bottom: 96px; }
+  @media (min-width: 981px) { .zeon-open .tracebar { right: 428px; } } /* step aside while the Zeon panel is open */
+  .tracecard { position: relative; pointer-events: auto; background: hsl(var(--card)); border: 1px solid hsl(var(--chain) / .5); border-radius: 12px; padding: 8px 34px 8px 12px; box-shadow: 0 10px 30px hsl(0 0% 0% / .22); font-size: 12.5px; }
+  .tracecard-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; } .tracecard-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tracecard-more { display: none; margin-top: 4px; }
+  .tracecard:hover .tracecard-more, .tracecard:focus-within .tracecard-more, .tracebar.dev .tracecard-more, .tracecard.bad .tracecard-more { display: block; } .tracecard.bad .tracecard-label { white-space: normal; }
+  .tracecard-x { position: absolute; top: 6px; right: 6px; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; color: hsl(var(--muted-foreground)); } .tracecard-x:hover { background: hsl(var(--accent)); color: hsl(var(--foreground)); } .tracecard-x:focus-visible { outline: 2px solid hsl(var(--primary)); }
   .tracecard.bad { border-color: hsl(var(--bad) / .6); }
   .print-only { display: none; }
   @media print {

@@ -7,7 +7,7 @@ import { Card, CardBody, Field, Loading, Notice, PageHead } from '../components/
 interface Lot { id: string; lotNo: string; countDisplay: string; customerId: string | null; customerName: string | null }
 export default function ComplaintNew(): JSX.Element {
   const [sp] = useSearchParams(); const nav = useNavigate(); const lots = useGet<Lot[]>('/api/lots'); const create = useMut<{ lotId: string; type: ComplaintType; description: string }, { id: string }>('POST', '/api/complaints', 'Register customer complaint');
-  const [lotId, setLotId] = useState(''); const [type, setType] = useState<ComplaintType>('HAIRINESS'); const [description, setDescription] = useState(''); const [error, setError] = useState('');
+  const [lotId, setLotId] = useState(''); const [type, setType] = useState<ComplaintType>(((COMPLAINT_TYPES as readonly string[]).includes(sp.get('type') ?? '') ? sp.get('type') : 'HAIRINESS') as ComplaintType); const [description, setDescription] = useState(() => (sp.get('desc') ?? '').slice(0, 500)); const [error, setError] = useState('');
   const pre = sp.get('lot'); const submit = async () => { try { setError(''); const out = await create.mutateAsync({ lotId, type, description }); nav(`/complaints/${out.id}`); } catch (e) { setError(e instanceof Error ? e.message : 'Could not register complaint'); } };
   const selected = lots.data?.find((x) => x.id === lotId); const initial = lots.data?.find((x) => x.lotNo === pre);
   if (!lotId && initial) setTimeout(() => setLotId(initial.id), 0);

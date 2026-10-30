@@ -4,6 +4,7 @@ import { useSession } from './lib/store';
 import { Shell } from './components/Shell';
 import { Spinner, PageHead, Card, CardBody } from './components/ui';
 import Login from './pages/Login';
+import Zeon from './components/zeon/Zeon';
 
 const page = <T extends { default: React.ComponentType }>(f: () => Promise<T>) => lazy(f);
 const Dashboard = page(() => import('./pages/Dashboard'));
@@ -41,7 +42,8 @@ function NotFound(): JSX.Element { return <div className="page"><PageHead eyebro
 export default function App(): JSX.Element {
   const { token, user } = useSession();
   const loc = useLocation();
-  return <Suspense fallback={<Spinner label="Opening workspace…" />}>
+  // Zeon sits outside the loading boundary, so the open conversation never disappears while a page's code loads
+  return <><Suspense fallback={<Spinner label="Opening workspace…" />}>
     <Routes>
       <Route path="/passport/:code" element={<PublicPassport />} />
       {!token || !user ? <Route path="*" element={<Login />} /> : user.role === 'BUYER' ? <>
@@ -63,5 +65,5 @@ export default function App(): JSX.Element {
         </Route>
       </>}
     </Routes>
-  </Suspense>;
+  </Suspense><Zeon /></>;
 }

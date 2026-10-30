@@ -18,12 +18,14 @@ import { devRouter } from './api/dev';
 import { buildPassport } from './domain/lots';
 import { forwardTrace } from './domain/overview';
 import { demoContext } from './domain/demoContext';
+import { zeonRouter } from './api/zeon';
+import type { ModelCall } from './zeon/model';
 
 type Row = Record<string, unknown>;
 const userOf = (row: Row): AuthedUser => ({ id: String(row.id), username: String(row.username), name: String(row.name), role: row.role as AuthedUser['role'], org: String(row.org), customerId: (row.customer_id as string) ?? null });
 const str = (v: unknown) => (v === null || v === undefined ? '' : String(v));
 
-export interface AppOptions { reset?: () => Promise<void> }
+export interface AppOptions { reset?: () => Promise<void>; /** replaces the real model call (tests) */ zeonLlm?: ModelCall }
 
 export function createApp(db: DB, ledger: LedgerService, runtime: ContractRuntime = createRuntime(db, ledger), options: AppOptions = {}): express.Express {
   const app = express();
@@ -103,13 +105,13 @@ export function createApp(db: DB, ledger: LedgerService, runtime: ContractRuntim
     if (!row) return fail(res, 401, 'UNAUTHENTICATED', 'Sign in to continue');
     req.actor = userOf(row);
     // customers only ever reach the portal API (and the shared meta / document-file routes)
-    if (req.actor.role === 'BUYER' && !/^\/api\/(portal\/|auth\/|meta|documents(\/[^/]+\/file)?$|passports\/)/.test(req.path)) return fail(res, 403, 'PERMISSION_DENIED', 'Customers can only use the customer portal');
+    if (req.actor.role === 'BUYER' && !/^\/api\/(portal\/|auth\/|zeon\/|meta|documents(\/[^/]+\/file)?$|passports\/)/.test(req.path)) return fail(res, 403, 'PERMISSION_DENIED', 'Customers can only use the customer portal');
     next();
   });
   app.get('/api/auth/me', async (req: AuthedRequest, res) => ok(res, await db.prepare('SELECT id,username,name,role,org,title,customer_id AS customerId FROM users WHERE id=?').get(req.actor?.id)));
   app.get('/api/notifications', async (_req, res) => ok(res, await db.prepare('SELECT id,severity,title,body,link,created_at AS createdAt,read FROM notifications ORDER BY created_at DESC LIMIT 50').all()));
   app.get('/api/dashboard/activity', async (req, res) => ok(res, await db.prepare("SELECT action_id AS id,timestamp AS at,COALESCE(username,'system') AS actorName,COALESCE(role,'SYSTEM') AS actorRole,action,label,accepted,block_number AS blockNumber FROM audit_log ORDER BY timestamp DESC LIMIT ?").all(Math.min(Number(req.query.limit) || 10, 100))));
-  app.use('/api', lotsRouter(c), mastersRouter(c), complaintsRouter(c), portalRouter(c), devRouter(c, options.reset ?? (async () => { throw new Error('Reset is not configured'); })));
+  app.use('/api', lotsRouter(c), mastersRouter(c), complaintsRouter(c), portalRouter(c), zeonRouter(c, { llm: options.zeonLlm }), devRouter(c, options.reset ?? (async () => { throw new Error('Reset is not configured'); })));
 
   app.use((_req, res) => fail(res, 404, 'NOT_FOUND', 'API route not found'));
   app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
