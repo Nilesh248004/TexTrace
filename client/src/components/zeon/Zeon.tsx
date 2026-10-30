@@ -8,7 +8,7 @@ import { ROLE_LABEL } from '@shared/permissions';
 import type { ZeonAction, ZeonChatResponse, ZeonMessage } from '@shared/zeon';
 import { ApiError, request } from '../../lib/api';
 import { useSession, useTraces } from '../../lib/store';
-import { blocks, inline, plainForSpeech, suggestionsFor } from '../../lib/zeonUi';
+import { blocks, inline, plainForSpeech, speechChunks, suggestionsFor } from '../../lib/zeonUi';
 import './zeon.css';
 
 interface Msg { id: number; role: 'user' | 'assistant'; text: string; actions?: ZeonAction[]; error?: boolean }
@@ -17,6 +17,7 @@ type RecognitionCtor = new () => RecognitionLike;
 
 const recognitionCtor = (): RecognitionCtor | null => (typeof window === 'undefined' ? null : ((window as unknown as { SpeechRecognition?: RecognitionCtor; webkitSpeechRecognition?: RecognitionCtor }).SpeechRecognition ?? (window as unknown as { webkitSpeechRecognition?: RecognitionCtor }).webkitSpeechRecognition ?? null));
 const canSpeak = (): boolean => typeof window !== 'undefined' && 'speechSynthesis' in window && typeof SpeechSynthesisUtterance !== 'undefined';
+const SPEECH_SPEED = 1.1; // how fast Zeon talks (1 = normal)
 const canVoice = (): boolean => typeof window !== 'undefined' && (typeof Audio !== 'undefined' || canSpeak());
 
 /** The most natural-sounding English voice this browser has (the built-in fallback; the server's Gemini voice is used first). */
@@ -109,20 +110,29 @@ export default function Zeon(): JSX.Element | null {
     const token = voice.current.token; const words = plainForSpeech(text);
     const fallback = () => {
       if (!canSpeak() || voice.current.token !== token || !openRef.current) return;
-      const u = new SpeechSynthesisUtterance(words); u.lang = 'en-IN'; u.rate = 0.97; u.pitch = 1.03;
+      const u = new SpeechSynthesisUtterance(words); u.lang = 'en-IN'; u.rate = SPEECH_SPEED; u.pitch = 1.03;
       const v = bestVoice(); if (v) { u.voice = v; u.lang = v.lang; }
       window.speechSynthesis.speak(u);
     };
+    // every piece is requested at once; the first is short, so it comes back fast and starts playing while the others are still being made
+    const pieces = speechChunks(words);
+    const fetched = pieces.map((piece) => request<{ configured: boolean; mime?: string; audio?: string }>('POST', '/api/zeon/speak', { text: piece }).then((r) => r.data, () => null));
+    let started = false;
     try {
-      const { data } = await request<{ configured: boolean; mime?: string; audio?: string }>('POST', '/api/zeon/speak', { text: words });
-      if (voice.current.token !== token || !openRef.current) return; // closed, muted or replaced while the voice was being made
-      if (!data.configured || !data.audio || typeof Audio === 'undefined') return fallback();
-      const bytes = Uint8Array.from(atob(data.audio), (c) => c.charCodeAt(0));
-      const url = URL.createObjectURL(new Blob([bytes], { type: data.mime ?? 'audio/wav' }));
-      const audio = new Audio(url); voice.current.audio = audio; voice.current.url = url;
-      audio.onended = () => { if (voice.current.audio === audio) { URL.revokeObjectURL(url); voice.current.audio = null; voice.current.url = null; } };
-      await audio.play();
-    } catch { fallback(); }
+      for (const [i, pending] of fetched.entries()) {
+        const data = await pending;
+        if (voice.current.token !== token || !openRef.current) return; // closed, muted or replaced while the voice was being made
+        if (!data?.configured || !data.audio || typeof Audio === 'undefined') { if (i === 0) return fallback(); return; }
+        const bytes = Uint8Array.from(atob(data.audio), (c) => c.charCodeAt(0));
+        const url = URL.createObjectURL(new Blob([bytes], { type: data.mime ?? 'audio/wav' }));
+        const audio = new Audio(url); audio.playbackRate = SPEECH_SPEED; audio.preservesPitch = true;
+        if (voice.current.url) URL.revokeObjectURL(voice.current.url);
+        voice.current.audio = audio; voice.current.url = url;
+        started = true;
+        await new Promise<void>((done, fail) => { audio.onended = () => done(); audio.onerror = () => fail(new Error('audio')); audio.play().catch(fail); });
+        if (voice.current.token !== token) return;
+      }
+    } catch { if (voice.current.token === token && !started) fallback(); }
   }, [speak]);
 
   const send = useCallback(async (raw?: string) => {
