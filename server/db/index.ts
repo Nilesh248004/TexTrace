@@ -24,6 +24,12 @@ export function openDb(file: string = config.dbFile): DB {
   native.pragma('foreign_keys = ON');
   native.pragma('synchronous = NORMAL');
   native.exec(SCHEMA_SQL);
+  // Upgrade existing SQLite files without dropping historical bale data.
+  const baleColumns = native.pragma('table_info(bales)') as Array<{ name: string }>;
+  if (!baleColumns.some((column) => column.name === 'arrival_date')) {
+    native.exec('ALTER TABLE bales ADD COLUMN arrival_date TEXT');
+  }
+  native.exec(`UPDATE bales SET arrival_date = COALESCE(NULLIF(arrival_date, ''), NULLIF(received_at, ''), NULLIF(created_at, ''), CURRENT_TIMESTAMP) WHERE arrival_date IS NULL OR arrival_date = ''`);
   return new SqliteDatabase(native);
 }
 
