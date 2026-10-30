@@ -44,6 +44,17 @@ type ImportPreview = {
   notes: string[];
 };
 
+type ImportResult = {
+  jobId: string;
+  fileName: string;
+  completedAt: string;
+  demoOnly: boolean;
+  scope: string;
+  summary: { attempted: number; imported: number; alreadyImported: number; skipped: number; failed: number };
+  results: Array<{ sourceId: string; status: 'IMPORTED' | 'SKIPPED' | 'FAILED'; targetId?: string; message: string }>;
+  notes: string[];
+};
+
 type Envelope<T> = {
   ok: boolean;
   data?: T;
@@ -77,6 +88,7 @@ export default function PdfImport(): JSX.Element {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
+  const [importResult, setImportResult] = useState<ImportResult | null>(null);
 
   const refreshJobs = useCallback(async () => {
     try {
@@ -133,6 +145,7 @@ export default function PdfImport(): JSX.Element {
       setCurrent(job);
       setStructuredDraft(job.structured ? JSON.stringify(job.structured, null, 2) : '');
       setImportPreview(null);
+      setImportResult(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not open import');
     } finally {
@@ -149,7 +162,7 @@ export default function PdfImport(): JSX.Element {
       const job = await api<ImportJob>(
         `/api/pdf-import/${encodeURIComponent(current.id)}/extract`,
         token,
-        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmDemoData: isDemoDataset }) },
       );
       setCurrent(job);
       setStructuredDraft(JSON.stringify(job.structured ?? {}, null, 2));
@@ -239,6 +252,37 @@ export default function PdfImport(): JSX.Element {
       setNotice('Read-only import preview completed. No production records were changed.');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not prepare import preview');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function importEligibleBales() {
+    if (!current) return;
+    const isDemoDataset =
+      current.structured?.validationMode === 'DEMO_ONLY' &&
+      current.structured?.datasetLabel === 'TEXTRACE-DEMO-2026-10';
+    const confirmed = window.confirm(
+      isDemoDataset
+        ? 'This is synthetic DEMO data. Import eligible bale records into TexTrace? This will write demo records to the current database through the AssetID contract. Blocked records will be skipped.'
+        : 'Import eligible bale records into TexTrace now? This writes production records through the AssetID contract. Blocked records will be skipped and retained in staging.'
+    );
+    if (!confirmed) return;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    setImportResult(null);
+    try {
+      const result = await api<ImportResult>(
+        `/api/pdf-import/${encodeURIComponent(current.id)}/import-ready`,
+        token,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmDemoData: isDemoDataset }) },
+      );
+      setImportResult(result);
+      setNotice(`Partial import finished: ${result.summary.imported} imported, ${result.summary.skipped} skipped, ${result.summary.failed} failed.`);
+      await refreshJobs();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not import eligible records');
     } finally {
       setBusy(false);
     }
@@ -399,7 +443,39 @@ export default function PdfImport(): JSX.Element {
           {current.status !== 'REVIEWED' && <button className="btn primary" type="button" onClick={() => void markReviewed()} disabled={busy}>
             <CheckCircle2 size={16} /> Mark review complete
           </button>}
+          {current.status === 'REVIEWED' && current.structured && <button className="btn primary" type="button" onClick={() => void importEligibleBales()} disabled={busy}>
+            {busy ? <Loader2 size={16} /> : <Upload size={16} />} Import eligible bales
+          </button>}
         </div>
+      </CardBody>
+    </Card>}
+
+    {importResult && <Card>
+      <CardBody>
+        <h3 style={{ marginTop: 0 }}>Partial import results</h3>
+        <p className="muted small">Job {importResult.jobId} · {importResult.scope} · {new Date(importResult.completedAt).toLocaleString()}</p>
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+          <span className="pill gray">Attempted: {importResult.summary.attempted}</span>
+          <span className="pill green">Imported: {importResult.summary.imported}</span>
+          <span className="pill blue">Already imported: {importResult.summary.alreadyImported}</span>
+          <span className="pill red">Skipped: {importResult.summary.skipped}</span>
+          <span className="pill red">Failed: {importResult.summary.failed}</span>
+        </div>
+        <p className="muted small" style={{ marginTop: 10 }}>
+          This endpoint currently imports eligible bale receipts only. Other record types remain in staging; retrying will not duplicate bales already imported by this job.
+        </p>
+        <div style={{ overflowX: 'auto' }}>
+          <table className="table">
+            <thead><tr><th>Source ID</th><th>Status</th><th>TexTrace ID</th><th>Result</th></tr></thead>
+            <tbody>{importResult.results.map((item, index) => <tr key={item.sourceId + '-' + index}>
+              <td>{item.sourceId}</td>
+              <td><span className={`pill ${item.status === 'IMPORTED' ? 'green' : item.status === 'SKIPPED' ? 'blue' : 'red'}`}>{item.status}</span></td>
+              <td>{item.targetId ?? '—'}</td>
+              <td>{item.message}</td>
+            </tr>)}</tbody>
+          </table>
+        </div>
+        <ul className="muted small">{importResult.notes.map((note, index) => <li key={index}>{note}</li>)}</ul>
       </CardBody>
     </Card>}
 
