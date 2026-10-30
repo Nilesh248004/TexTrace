@@ -26,7 +26,7 @@ export const ENTITIES: Record<string, EntityDef> = {
   machine: def({ type: 'machine', table: 'machines', idColumn: 'id', fields: ['id', 'department', 'machine_no', 'label', 'line', 'make', 'model', 'spindles', 'created_at'], domains: ['lots', 'production'] }),
   bale: def({
     type: 'bale', table: 'bales', idColumn: 'id',
-    fields: ['id', 'bale_no', 'supplier', 'station', 'variety', 'gin_lot', 'weight_kg', 'remaining_kg', 'received_at', 'bay', 'bin', 'status', 'issued_at', 'mix_id', 'fibre', 'created_at'],
+    fields: ['id', 'bale_no', 'supplier', 'station', 'variety', 'gin_lot', 'weight_kg', 'remaining_kg', 'received_at', 'arrival_date', 'bay', 'bin', 'status', 'issued_at', 'mix_id', 'fibre', 'created_at'],
     jsonFields: ['fibre'], domains: ['bales', 'lots'],
   }),
   mix: def({
