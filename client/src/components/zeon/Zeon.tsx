@@ -59,8 +59,8 @@ export default function Zeon(): JSX.Element | null {
   const [voiceNote, setVoiceNote] = useState('');
   const [speak, setSpeak] = useState<boolean>(() => read('zeon.speak', false));
   const [burst, setBurst] = useState(0);
-  // the icon's mood: crying by default (and again whenever Zeon is closed); smiling while the pointer is over it or while Zeon is open
-  const [hover, setHover] = useState(false);
+  // the icon's mood: on page load it only stares (no tears); smiling while hovered or while Zeon is open; after that, only crying
+  const [hover, setHover] = useState(false); const [touched, setTouched] = useState(false); // touched: it has been hovered or clicked, so the staring look is not shown again
   const tiltRef = useRef<HTMLSpanElement | null>(null);
   const [nudge, setNudge] = useState('');
   const [handled, setHandled] = useState<Record<string, 'done' | 'skipped'>>({});
@@ -183,7 +183,7 @@ export default function Zeon(): JSX.Element | null {
     el.style.setProperty('--ry', `${((e.clientX - r.left) / r.width - 0.5) * 26}deg`); el.style.setProperty('--rx', `${-((e.clientY - r.top) / r.height - 0.5) * 26}deg`);
   };
   const untilt = () => { tiltRef.current?.style.setProperty('--rx', '0deg'); tiltRef.current?.style.setProperty('--ry', '0deg'); };
-  const toggle = () => { setOpen((o) => !o); setBurst((n) => n + 1); window.setTimeout(() => setBurst(0), 750); };
+  const toggle = () => { setTouched(true); setOpen((o) => !o); setBurst((n) => n + 1); window.setTimeout(() => setBurst(0), 750); };
 
   const act = (m: Msg, i: number, a: ZeonAction) => {
     if (a.type === 'open_form') setHandled((h) => ({ ...h, [`${m.id}:${i}`]: 'done' }));
@@ -234,12 +234,12 @@ export default function Zeon(): JSX.Element | null {
     </section> : null}
     {nudge && !open ? <button type="button" className="zeon-nudge" onClick={openFromNudge} data-testid="zeon-nudge">{nudge}</button> : null}
     <button type="button" className={`zeon-fab${busy ? ' thinking' : ''}${listening ? ' listening' : ''}${nudge && !open ? ' alert' : ''}`} aria-label="Ask Zeon" aria-expanded={open} title="Ask Zeon" data-testid="zeon-fab"
-      onClick={toggle} onPointerMove={tilt} onPointerLeave={() => { untilt(); setHover(false); }} onPointerEnter={() => setHover(true)}>
+      onClick={toggle} onPointerMove={tilt} onPointerLeave={() => { untilt(); setHover(false); }} onPointerEnter={() => { setHover(true); setTouched(true); }}>
       <span className="zeon-aura" /><span className="zeon-ring" /><span className="zeon-ring r2" />
       <span className="zeon-orbit"><i className="zeon-spark s1" /><i className="zeon-spark s2" /><i className="zeon-spark s3" /></span>
       <span className="zeon-orbit rev"><i className="zeon-spark s1" /><i className="zeon-spark s2" /></span>
       <span className="zeon-shadow" />
-      <span className="zeon-float"><span className="zeon-tilt" ref={tiltRef}><span className="zeon-mood" aria-hidden="true">{hover || open ? <ZeonFace key="happy" size={104} play /> : <ZeonCry key="sad" size={104} />}</span>
+      <span className="zeon-float"><span className="zeon-tilt" ref={tiltRef}><span className="zeon-mood" aria-hidden="true">{hover || open ? <ZeonFace key="happy" size={104} play /> : <ZeonCry key="sad" size={104} mode={touched ? 'cry' : 'stare'} />}</span>
       </span></span>
       {burst ? Array.from({ length: 10 }, (_, i) => { const a = (Math.PI * 2 * i) / 10 + (i % 3) * 0.13; const d = 55 + (i % 4) * 8; return <i key={i} className="zeon-burst" style={{ '--tx': `${Math.cos(a) * d}px`, '--ty': `${Math.sin(a) * d}px` } as React.CSSProperties} />; }) : null}
     </button>
