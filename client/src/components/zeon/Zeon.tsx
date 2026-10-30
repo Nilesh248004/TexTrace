@@ -9,6 +9,8 @@ import type { ZeonAction, ZeonChatResponse, ZeonMessage } from '@shared/zeon';
 import { ApiError, request } from '../../lib/api';
 import { useSession, useTraces } from '../../lib/store';
 import { blocks, inline, plainForSpeech, speechChunks, suggestionsFor } from '../../lib/zeonUi';
+import { ZeonCry } from './ZeonCry';
+import { ZeonFace } from './ZeonFace';
 import './zeon.css';
 
 interface Msg { id: number; role: 'user' | 'assistant'; text: string; actions?: ZeonAction[]; error?: boolean }
@@ -57,6 +59,8 @@ export default function Zeon(): JSX.Element | null {
   const [voiceNote, setVoiceNote] = useState('');
   const [speak, setSpeak] = useState<boolean>(() => read('zeon.speak', false));
   const [burst, setBurst] = useState(0);
+  // the icon's mood: crying by default (and again whenever Zeon is closed); smiling while the pointer is over it or while Zeon is open
+  const [hover, setHover] = useState(false);
   const tiltRef = useRef<HTMLSpanElement | null>(null);
   const [nudge, setNudge] = useState('');
   const [handled, setHandled] = useState<Record<string, 'done' | 'skipped'>>({});
@@ -230,15 +234,13 @@ export default function Zeon(): JSX.Element | null {
     </section> : null}
     {nudge && !open ? <button type="button" className="zeon-nudge" onClick={openFromNudge} data-testid="zeon-nudge">{nudge}</button> : null}
     <button type="button" className={`zeon-fab${busy ? ' thinking' : ''}${listening ? ' listening' : ''}${nudge && !open ? ' alert' : ''}`} aria-label="Ask Zeon" aria-expanded={open} title="Ask Zeon" data-testid="zeon-fab"
-      onClick={toggle} onPointerMove={tilt} onPointerLeave={untilt}>
+      onClick={toggle} onPointerMove={tilt} onPointerLeave={() => { untilt(); setHover(false); }} onPointerEnter={() => setHover(true)}>
       <span className="zeon-aura" /><span className="zeon-ring" /><span className="zeon-ring r2" />
       <span className="zeon-orbit"><i className="zeon-spark s1" /><i className="zeon-spark s2" /><i className="zeon-spark s3" /></span>
       <span className="zeon-orbit rev"><i className="zeon-spark s1" /><i className="zeon-spark s2" /></span>
       <span className="zeon-shadow" />
-      <span className="zeon-float"><span className="zeon-tilt" ref={tiltRef}><span className="zeon-orb" aria-hidden="true">
-        <span className="zeon-gloss" /><span className="zeon-bounce" />
-        {open ? <X size={26} className="zeon-x" /> : <svg className="zeon-bolt" viewBox="0 0 24 24" fill="none"><defs><linearGradient id="zeonBoltFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#ffffff" /><stop offset="1" stopColor="#cfe0ff" /></linearGradient></defs><path d="M13.2 2.6 4.6 13.4c-.4.5 0 1.2.6 1.2h5.2l-1 6.2c-.1.8.9 1.2 1.4.6l8.6-10.9c.4-.5 0-1.2-.6-1.2h-5.1l1-6.1c.1-.8-.9-1.2-1.5-.6Z" fill="url(#zeonBoltFill)" stroke="#fff" strokeWidth=".6" strokeLinejoin="round" /></svg>}
-      </span></span></span>
+      <span className="zeon-float"><span className="zeon-tilt" ref={tiltRef}><span className="zeon-mood" aria-hidden="true">{hover || open ? <ZeonFace key="happy" size={104} play /> : <ZeonCry key="sad" size={104} />}</span>
+      </span></span>
       {burst ? Array.from({ length: 10 }, (_, i) => { const a = (Math.PI * 2 * i) / 10 + (i % 3) * 0.13; const d = 55 + (i % 4) * 8; return <i key={i} className="zeon-burst" style={{ '--tx': `${Math.cos(a) * d}px`, '--ty': `${Math.sin(a) * d}px` } as React.CSSProperties} />; }) : null}
     </button>
   </div>;
