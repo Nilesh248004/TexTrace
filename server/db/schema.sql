@@ -172,6 +172,7 @@ CREATE TABLE IF NOT EXISTS bales (
   weight_kg    REAL NOT NULL,
   remaining_kg REAL NOT NULL,
   received_at  TEXT NOT NULL,
+  arrival_date TEXT NOT NULL,
   bay          TEXT NOT NULL,             -- 'Bay B'
   bin          TEXT NOT NULL,             -- 'B-14'
   status       TEXT NOT NULL,             -- 'IN_STORE' | 'ISSUED'
