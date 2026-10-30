@@ -69,7 +69,21 @@ const r1 = (n: number, d = 1) => Math.round(n * 10 ** d) / 10 ** d;
 const pad = (n: number, w = 3) => String(n).padStart(w, '0');
 
 export function generatePlan(seed = 20261028): Plan {
-  const rnd = mulberry32(seed);
+  // One shared stream drives the original story; lots, machines and bales added later draw from their own seeded streams,
+  // so extending the mill never changes a single value of the lots that were already there.
+  const baseRnd = mulberry32(seed);
+  let liveRnd = baseRnd;
+  const rnd = () => liveRnd();
+  const streams = new Map<string, () => number>();
+  const streamFor = (key: string) => {
+    let st = streams.get(key);
+    if (!st) { st = mulberry32(seed + [...key].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) >>> 0, 7)); streams.set(key, st); }
+    return st;
+  };
+  function* eachKeyed<T>(list: T[], keyOf: (x: T) => string | null): Generator<T> {
+    try { for (const x of list) { const k = keyOf(x); liveRnd = k ? streamFor(k) : baseRnd; yield x; } } finally { liveRnd = baseRnd; }
+  }
+  const FIRST_NEW_LOT = 141;
   const gauss = () => { let u = 0; while (u === 0) u = rnd(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rnd()); };
   const between = (a: number, b: number) => a + (b - a) * rnd();
   const pick = <T>(arr: T[]): T => arr[Math.floor(rnd() * arr.length)];
@@ -142,6 +156,17 @@ export function generatePlan(seed = 20261028): Plan {
   for (let i = 1; i <= 4; i++) addM('FF', i, 'LMW', 'LF 1400 A', 120);
   for (let i = 1; i <= 10; i++) addM('RF', i, i >= 9 ? 'LMW' : i >= 6 ? 'Rieter' : 'LMW', i >= 9 ? 'LR 9/AX Compact' : i >= 6 ? 'G 38' : 'LR 6/S', i >= 9 ? 1008 : i >= 6 ? 1200 : 1056, i >= 9 ? 'Compact' : 'Carded');
   for (let i = 1; i <= 4; i++) addM('AW', i, 'Schlafhorst', 'Autoconer X5', 60);
+  // second spinning block for the 16s / 24s / 34s carded and 30s / 50s / 60s compact counts
+  const firstNewMachine = machines.length;
+  for (let i = 3; i <= 4; i++) addM('BR', i, 'Trützschler', 'Blow-room line BO-A', 0, `Line ${i}`);
+  for (let i = 13; i <= 24; i++) addM('CARD', i, 'LMW', 'LC 300 A', 0);
+  for (let i = 3; i <= 4; i++) addM('DFB', i, 'Rieter', 'RSB-D 24', 0);
+  for (let i = 4; i <= 5; i++) addM('DFF', i, 'Rieter', 'RSB-D 26', 0);
+  for (let i = 3; i <= 4; i++) addM('COMB', i, 'LMW', 'LK 69', 0);
+  for (let i = 5; i <= 10; i++) addM('FF', i, 'LMW', 'LF 1400 A', 120);
+  for (let i = 11; i <= 22; i++) addM('RF', i, i >= 17 ? 'LMW' : 'Rieter', i >= 17 ? 'LR 9/AX Compact' : 'G 38', i >= 17 ? 1008 : 1200, i >= 17 ? 'Compact' : 'Carded');
+  for (let i = 5; i <= 10; i++) addM('AW', i, 'Schlafhorst', 'Autoconer X5', 60);
+  const newMachineIds = new Set(machines.slice(firstNewMachine).map((m) => m.id));
   const mach = (id: string) => machines.find((m) => m.id === id) as Mach;
   const t1 = istMs('2026-08-21', 11);
   machines.forEach((m, i) => rows.push({
@@ -159,6 +184,12 @@ export function generatePlan(seed = 20261028): Plan {
     RF: { '20S': ['RF-1', 'RF-2'], '30CH': ['RF-3', 'RF-4', 'RF-5'], '40CH': ['RF-6', 'RF-7', 'RF-8'], '40CP': ['RF-9', 'RF-10'] },
     AW: { '20S': ['AW-1'], '30CH': ['AW-1', 'AW-4'], '40CH': ['AW-2', 'AW-3'], '40CP': ['AW-3', 'AW-4'] },
   };
+  ['16S', '24CH', '34CH', '30CP', '50CP', '60CP'].forEach((cid, k) => {
+    const compact = k >= 3;
+    GROUPS.BR[cid] = [compact ? 'BR-4' : 'BR-3']; GROUPS.CARD[cid] = [`CARD-${13 + 2 * k}`, `CARD-${14 + 2 * k}`];
+    GROUPS.DFB[cid] = [compact ? 'DFB-4' : 'DFB-3']; GROUPS.DFF[cid] = [compact ? 'DFF-5' : 'DFF-4']; if (compact) GROUPS.COMB[cid] = ['COMB-3', 'COMB-4'];
+    GROUPS.FF[cid] = [`FF-${5 + k}`]; GROUPS.RF[cid] = [`RF-${11 + 2 * k}`, `RF-${12 + 2 * k}`]; GROUPS.AW[cid] = [`AW-${5 + k}`];
+  });
 
   // ---------------------------------------------------------------- masters
   const OMIT: Record<string, string[]> = {
@@ -173,7 +204,7 @@ export function generatePlan(seed = 20261028): Plan {
   const SEED_QA = 'U-QA';
   let mvSeq = 0;
   for (const c of COUNTS) {
-    const all = buildItems(c).filter((i) => !(OMIT[c.id] ?? (c.compact ? OMIT['40CP'] : [])).includes(`${i.master}|${i.scope}|${i.key}`));
+    const all = buildItems(c).filter((i) => !(OMIT[c.id] ?? []).includes(`${i.master}|${i.scope}|${i.key}`));
     itemsOf[c.id] = all;
     for (const i of all) limits.set(`${c.id}|${i.master}|${i.scope}|${i.key}`, i);
     for (const type of MASTER_TYPES) {
@@ -308,7 +339,7 @@ export function generatePlan(seed = 20261028): Plan {
     Suvin: { n: 7, sup: [['Palani Suvin Growers Ginning', 'Dindigul']], mic: 3.6, uhml: 33.0, ui: 84, str: 33, sfi: 6.4, trash: 1.8, rd: 78, b: 8.0, bays: ['Bay F'] },
   } as const;
   type Variety = keyof typeof VAR;
-  interface Bale { id: string; no: number; variety: Variety; supplier: string; station: string; ginLot: string; kg: number; recv: number; bay: string; bin: string; fibre: Record<string, number>; mixId: string | null; issued: number | null; planted?: boolean }
+  interface Bale { extra?: boolean; id: string; no: number; variety: Variety; supplier: string; station: string; ginLot: string; kg: number; recv: number; bay: string; bin: string; fibre: Record<string, number>; mixId: string | null; issued: number | null; planted?: boolean }
   const bales: Bale[] = [];
   const recvStart = istMs('2026-09-18', 9);
   const recvEnd = NOW - 14 * HOUR;
@@ -333,6 +364,30 @@ export function generatePlan(seed = 20261028): Plan {
   });
 
   interface MixPlan { no: number; id: string; count: CountSpec; customer: string; lots: number; nBales: number; split: Record<string, number>; start: number | null; planned: boolean; bales: Bale[]; totalKg: number; baleKg: number; fibre: Record<string, number>; recipe: Record<string, unknown>[]; brLine: string }
+  // bales for the six later mixes (M-018…M-023): received 3–16 Oct, drawn from their own stream
+  {
+    const NEED: [Variety, number][] = [['Shankar-6', 13], ['MCU-5', 6], ['DCH-32', 15], ['Suvin', 6]];
+    const ex: { v: Variety; recv: number }[] = [];
+    liveRnd = streamFor('extra-bales');
+    for (const [v, n] of NEED) for (let i = 0; i < n; i++) ex.push({ v, recv: istMs('2026-10-03', 9) + rnd() * (istMs('2026-10-16', 9) - istMs('2026-10-03', 9)) });
+    ex.sort((a, b) => a.recv - b.recv);
+    ex.forEach((s2, i) => {
+      const info = VAR[s2.v];
+      const [sup, stn] = pick(info.sup as unknown as string[][]);
+      const bay = pick(info.bays as unknown as string[]);
+      binNo[bay] = (binNo[bay] ?? 0) + 1;
+      const no = 9001 + specs.length + i;
+      bales.push({
+        extra: true, id: `BALE-${no}`, no, variety: s2.v, supplier: sup, station: stn, ginLot: `${stn.slice(0, 2).toUpperCase()}-26-${pad(Math.floor(rnd() * 900 + 100), 4)}`,
+        kg: r1(168 + rnd() * 14, 0), recv: s2.recv, bay, bin: `${bay.slice(-1)}-${pad(binNo[bay], 2)}`, mixId: null, issued: null,
+        fibre: {
+          MIC: r1(info.mic + gauss() * 0.12, 2), UHML: r1(info.uhml + gauss() * 0.35, 1), UI: r1(info.ui + gauss() * 0.5, 1), STR: r1(info.str + gauss() * 0.5, 1), SFI: r1(info.sfi + gauss() * 0.35, 1),
+          TRASH: r1(info.trash + gauss() * 0.15, 2), MOIST: r1(7.4 + gauss() * 0.25, 1), RD: r1(info.rd + gauss() * 0.8, 1), PLUS_B: r1(info.b + gauss() * 0.3, 1),
+        },
+      });
+    });
+    liveRnd = baseRnd;
+  }
   const MIXES: [string, string, number, number, Record<string, number>, boolean?][] = [
     ['40CH', 'CUST-PDT', 2, 7, { 'Shankar-6': 5, 'DCH-32': 2 }], ['30CH', 'CUST-VKF', 3, 7, { 'Shankar-6': 5, 'MCU-5': 2 }], ['40CH', 'CUST-KVW', 2, 6, { 'Shankar-6': 4, 'DCH-32': 2 }],
     ['40CP', 'CUST-KVW', 2, 7, { 'DCH-32': 5, Suvin: 2 }], ['40CH', 'CUST-GGT', 3, 7, { 'Shankar-6': 5, 'DCH-32': 2 }], ['30CH', 'CUST-PDT', 2, 6, { 'Shankar-6': 4, 'MCU-5': 2 }],
@@ -340,9 +395,14 @@ export function generatePlan(seed = 20261028): Plan {
     ['40CP', 'CUST-PDT', 3, 8, { 'DCH-32': 7, Suvin: 1 }], ['20S', 'CUST-GGT', 2, 6, { 'Shankar-6': 4, 'MCU-5': 2 }], ['30CH', 'CUST-VKF', 2, 6, { 'Shankar-6': 4, 'MCU-5': 2 }],
     ['40CH', 'CUST-PDT', 3, 7, { 'Shankar-6': 5, 'DCH-32': 2 }], ['40CP', 'CUST-KVW', 2, 7, { 'DCH-32': 5, Suvin: 2 }], ['20S', 'CUST-SLH', 2, 6, { 'Shankar-6': 4, 'MCU-5': 2 }],
     ['40CH', 'CUST-GGT', 2, 7, { 'Shankar-6': 5, 'DCH-32': 2 }, true], ['30CH', 'CUST-PDT', 2, 7, { 'Shankar-6': 5, 'MCU-5': 2 }, true],
+    // second spinning block (mixes 18–23): one mix of two lots for each of the six newer counts
+    ['16S', 'CUST-NLF', 2, 6, { 'Shankar-6': 4, 'MCU-5': 2 }], ['24CH', 'CUST-AKT', 2, 6, { 'Shankar-6': 4, 'MCU-5': 2 }], ['34CH', 'CUST-BHT', 2, 7, { 'Shankar-6': 5, 'MCU-5': 2 }],
+    ['30CP', 'CUST-SMT', 2, 7, { 'DCH-32': 5, Suvin: 2 }], ['50CP', 'CUST-RKS', 2, 7, { 'DCH-32': 5, Suvin: 2 }], ['60CP', 'CUST-BHT', 2, 7, { 'DCH-32': 5, Suvin: 2 }],
   ];
   // explicit starts: the last mixes are close together so every stage has a lot in it at "now"
   const MIX_STARTS = ['2026-10-12 06:00', '2026-10-13 09:30', '2026-10-14 12:50', '2026-10-15 16:15', '2026-10-16 19:40', '2026-10-17 23:10', '2026-10-19 02:35', '2026-10-20 06:00', '2026-10-21 09:30', '2026-10-22 12:50', '2026-10-24 06:00', '2026-10-25 18:00', '2026-10-26 20:00', '2026-10-27 12:00', '2026-10-28 04:00'].map((x) => { const [d, t] = x.split(' '); const [h, m] = t.split(':').map(Number); return istMs(d, h, m); });
+  while (MIX_STARTS.length < 17) MIX_STARTS.push(Number.NaN); // mixes 16 and 17 are planned (no start)
+  MIX_STARTS.push(...['2026-10-19 08:00', '2026-10-20 14:00', '2026-10-20 20:00', '2026-10-20 09:00', '2026-10-21 21:00', '2026-10-23 18:00'].map((x) => { const [d, t] = x.split(' '); const [h, m] = t.split(':').map(Number); return istMs(d, h, m); }));
   const mixes: MixPlan[] = MIXES.map(([cid, customer, lots, nBales, split, planned], i) => ({
     no: i + 1, id: `MIX-${pad(i + 1)}`, count: countOf(cid), customer, lots, nBales, split, planned: !!planned, start: planned ? null : MIX_STARTS[i],
     bales: [], totalKg: 0, baleKg: 0, fibre: {}, recipe: [], brLine: GROUPS.BR[cid][0],
@@ -356,9 +416,10 @@ export function generatePlan(seed = 20261028): Plan {
       for (let k = 0; k < n; k++) {
         const limit = m.start === null ? NOW : m.start - DAY;
         let idx = -1;
+        const mine = (b: Bale) => !!b.extra === (m.no >= 18);
         if (m.no === 1 && variety === 'DCH-32') idx = free.findIndex((b) => b.planted && !b.mixId);
-        if (idx < 0) idx = free.findIndex((b) => b.variety === variety && !b.mixId && b.recv <= limit && !b.planted);
-        if (idx < 0) idx = free.findIndex((b) => b.variety === variety && !b.mixId && !b.planted);
+        if (idx < 0) idx = free.findIndex((b) => mine(b) && b.variety === variety && !b.mixId && b.recv <= limit && !b.planted);
+        if (idx < 0) idx = free.findIndex((b) => mine(b) && b.variety === variety && !b.mixId && !b.planted);
         const b = free[idx];
         b.mixId = m.id;
         m.bales.push(b);
@@ -394,7 +455,7 @@ export function generatePlan(seed = 20261028): Plan {
   };
   const accStart = istMs('2026-07-01', 9);
   const kindsFor = (m: Mach): AccessoryKind[] => (Object.keys(ACCESSORY_INFO) as AccessoryKind[]).filter((k) => ACCESSORY_INFO[k].stages.includes(m.stage));
-  for (const m of machines) {
+  for (const m of eachKeyed(machines, (x) => (newMachineIds.has(x.id) ? `mach-${x.id}` : null))) {
     const c = machCount(m);
     for (const kind of kindsFor(m)) {
       if (kind === 'SPACER') {
@@ -605,7 +666,7 @@ export function generatePlan(seed = 20261028): Plan {
     void rfRuns;
   }
   const lotPack = new Map<number, { packIn: number; packOut: number; cartons: number; cones: number; partial: number; netKg: number; avgCone: number; inKg: number }>();
-  for (const L of lots) simulateLot(L);
+  for (const L of eachKeyed(lots, (x) => (x.no >= FIRST_NEW_LOT ? `lot-${x.no}` : null))) simulateLot(L);
 
   // ---- truncate at NOW: drop what has not started, mark running stages
   const runsByLot = new Map<number, Run[]>();
@@ -616,7 +677,7 @@ export function generatePlan(seed = 20261028): Plan {
   const ships = new Map<number, Ship>();
   const HOLD_LOT = 126; const NO_RELEASE_LOT = 112; const COLOR_BAD_LOT = 119; const OVERRIDE_LOT = 117;
   const FORCE_DISPATCH: Record<number, number> = { 101: istMs('2026-10-27', 8, 30), 102: istMs('2026-10-27', 8, 30), 119: istMs('2026-10-26', 10, 15) };
-  for (const L of lots) {
+  for (const L of eachKeyed(lots, (x) => (x.no >= FIRST_NEW_LOT ? `lot-${x.no}` : null))) {
     const pk = lotPack.get(L.no);
     if (!pk) continue;
     const fgIn = pk.packOut;
@@ -633,7 +694,7 @@ export function generatePlan(seed = 20261028): Plan {
   // ---- finalize runs: truncate, ids, FG / DISP / DELIV rows
   const finalRuns: Run[] = [];
   const fgBay = new Map<number, string>();
-  for (const L of lots) {
+  for (const L of eachKeyed(lots, (x) => (x.no >= FIRST_NEW_LOT ? `lot-${x.no}` : null))) {
     const list = (runsByLot.get(L.no) ?? []).filter((r) => r.inAt <= NOW);
     for (const r of list) {
       if (r.outAt !== null && r.outAt > NOW) {
@@ -690,7 +751,7 @@ export function generatePlan(seed = 20261028): Plan {
     const xs = list.map((t) => t.values[key]).filter((v) => typeof v === 'number');
     return xs.length ? xs.reduce((s, v) => s + v, 0) / xs.length : null;
   };
-  for (const L of lots) {
+  for (const L of eachKeyed(lots, (x) => (x.no >= FIRST_NEW_LOT ? `lot-${x.no}` : null))) {
     const list = finalByLot.get(L.no) ?? [];
     const c = L.mix.count;
     const sfiStd = lim(c.id, 'QUALITY', 'BR', 'SFI')?.std ?? 8;
@@ -801,7 +862,7 @@ export function generatePlan(seed = 20261028): Plan {
   // ---- dispatch groups (lots of the same mix leaving together share one vehicle)
   interface Group { lots: LotPlan[]; at: number; deliveredAt: number | null; customer: string }
   const groups: Group[] = [];
-  for (const L of lots) {
+  for (const L of eachKeyed(lots, (x) => (x.no >= FIRST_NEW_LOT ? `lot-${x.no}` : null))) {
     const s = ships.get(L.no);
     if (!s || !s.dispatchAt) continue;
     const g = groups.find((x) => x.lots[0].mix === L.mix && Math.abs(x.at - (s.dispatchAt as number)) < 10 * HOUR);
@@ -814,7 +875,7 @@ export function generatePlan(seed = 20261028): Plan {
   const packingOf = new Map<number, { id: string; slip: string; cartons: number; cones: number; net: number; tare: number; gross: number; at: number; colorOk: boolean }>();
   let slipSeq = 140;
   const colorOf = (cid: string) => COLOR_OF[cid].colorName;
-  for (const L of lots) {
+  for (const L of eachKeyed(lots, (x) => (x.no >= FIRST_NEW_LOT ? `lot-${x.no}` : null))) {
     const pk = lotPack.get(L.no);
     const done = (finalByLot.get(L.no) ?? []).find((r) => r.stage === 'PACK' && r.outAt !== null);
     if (!pk || !done) continue;
@@ -895,7 +956,7 @@ export function generatePlan(seed = 20261028): Plan {
 
   // ---- lots
   const lotRowsById = new Map<number, SeedRow>();
-  for (const L of lots) {
+  for (const L of eachKeyed(lots, (x) => (x.no >= FIRST_NEW_LOT ? `lot-${x.no}` : null))) {
     const m = L.mix;
     const list = finalByLot.get(L.no) ?? [];
     const brRun = list.find((r) => r.stage === 'BR');
@@ -957,7 +1018,7 @@ export function generatePlan(seed = 20261028): Plan {
     o._kg = (o._kg as number) + kg;
     return o.id as string;
   };
-  for (const L of lots) orderFor(L.customer, L.mix.count.id, 0, (lotRowsById.get(L.no)?.at ? Date.parse(lotRowsById.get(L.no)!.at) : NOW) );
+  for (const L of eachKeyed(lots, (x) => (x.no >= FIRST_NEW_LOT ? `lot-${x.no}` : null))) orderFor(L.customer, L.mix.count.id, 0, (lotRowsById.get(L.no)?.at ? Date.parse(lotRowsById.get(L.no)!.at) : NOW) );
   const DRIVERS = ['R. Murugesan', 'A. Palanisamy', 'S. Kannan', 'M. Raja', 'T. Velmurugan', 'K. Subramani', 'P. Anbu'];
   const TRANSPORT: [string, string][] = [['SRM Roadways', 'SRM'], ['VRL Logistics', 'VRL'], ['Sri Murugan Transport', 'SMT'], ['Southern Express Cargo', 'SEC']];
   const dispatchOfLot = new Map<number, { id: string; no: string; at: number; deliveredAt: number | null }>();
@@ -965,7 +1026,7 @@ export function generatePlan(seed = 20261028): Plan {
   const specialDispatch: Record<number, { vehicle: string; driver: string; phone: string; transporter: string; lr: string; invoice: string; remarks: string }> = {
     101: { vehicle: 'TN-39-AB-4521', driver: 'R. Murugesan', phone: '+91 98427 70418', transporter: 'SRM Roadways', lr: 'SRM/26/10543', invoice: 'INV/26-27/0412', remarks: 'Held in FG bay for PD Textiles lifting schedule; lifted 27 Oct 08:30.' },
   };
-  for (const g of groups) {
+  for (const g of eachKeyed(groups, (x) => (x.lots[0].no >= FIRST_NEW_LOT ? `lot-${x.lots[0].no}` : null))) {
     const seq = ++dspSeq; const id = `DSP-2026-${pad(seq, 4)}`;
     const cust = CUSTOMERS.find((c) => c.id === g.customer)!;
     const cid = g.lots[0].mix.count.id;
@@ -1103,6 +1164,7 @@ export function generatePlan(seed = 20261028): Plan {
     ];
     let n = orders.length;
     for (const [customer, cid, kg, daysAgo, dueIn] of NEW_ORDERS) {
+      if (orders.some((o) => o.customer_id === customer && o.count_id === cid)) continue; // already ordered through real dispatches
       n += 1; const id = `ORD-2026-${pad(n)}`; const code = CUSTOMERS.find((c) => c.id === customer)!.code;
       orders.push({ id, order_no: id, po_no: `PO/${code}/2026/${100 + n * 7}`, customer_id: customer, count_id: cid, qty_kg: kg, ordered_at: iso(NOW - daysAgo * DAY), due_date: istDate(iso(NOW + dueIn * DAY)), status: 'OPEN' });
     }
@@ -1116,13 +1178,16 @@ export function generatePlan(seed = 20261028): Plan {
     { id: 'N-4', severity: 'info', title: 'Master v2 awaiting approval', body: '30s CH Production master v2 (spindle speed trial).', link: '/masters', created_at: iso(NOW - 2 * DAY) },
     { id: 'N-5', severity: 'critical', title: 'Lot 112 dispatched without QA release', body: 'Dispatch left on customer request before sign-off — regularise the release.', link: '/lots/LOT-112', created_at: iso(NOW - 26 * HOUR) },
     { id: 'N-6', severity: 'warning', title: `Complaint ${complaintSeqOfLot.get(110) ?? 20}/2026 awaiting analysis`, body: 'Hairiness complaint from Ganga Garments is still open after 24 h.', link: '/complaints', created_at: iso(NOW - 20 * HOUR) },
-    { id: 'N-7', severity: 'info', title: 'New customer onboarded: Arul Knitwear', body: 'Two open orders (24s CH, 40s CH) are ready for planning.', link: '/dispatch', created_at: iso(NOW - 4 * DAY) },
+    { id: 'N-7', severity: 'info', title: 'New customer onboarded: Arul Knitwear', body: 'First lots shipped; a further open order is ready for planning.', link: '/dispatch', created_at: iso(NOW - 4 * DAY) },
     { id: 'N-8', severity: 'info', title: 'New counts released: 24s CH, 34s CH, 30s/50s/60s compact', body: 'Master sets for the new counts are active from 1 Sep 2026.', link: '/masters', created_at: iso(NOW - 6 * DAY) },
     { id: 'N-9', severity: 'warning', title: 'QA override recorded on a dispatched lot', body: 'A lot with a parameter outside the master limit was released with a QA override; review the reason.', link: '/quality', created_at: iso(NOW - 30 * HOUR) },
     { id: 'N-10', severity: 'warning', title: 'Card 11 nep removal in warning band', body: 'CARD NEP_REMOVAL has been in the yellow zone for two shifts.', link: '/live', created_at: iso(NOW - 8 * HOUR) },
     { id: 'N-11', severity: 'info', title: 'Historical PDF import ready for review', body: 'Production register for Sep 2026 was extracted; 3 warnings need a look.', link: '/masters', created_at: iso(NOW - 12 * HOUR) },
     { id: 'N-12', severity: 'critical', title: 'Ledger tamper drill detected and restored', body: 'The developer console tamper test was caught by chain validation and then restored.', link: '/quality', created_at: iso(NOW - 40 * HOUR) },
   ];
+
+  // anything older than a day has been seen by someone
+  for (const n of notifications) (n as Record<string, unknown>).read = Date.parse(String(n.created_at)) < NOW - DAY ? 1 : 0;
 
   // -- settings: mill profile + operating policy (millName / warnFraction are the editable ones; the rest are read-only profile values)
   const settings: Record<string, unknown> = {
@@ -1252,7 +1317,7 @@ export function generatePlan(seed = 20261028): Plan {
       }
     }
   }
-  const sequences: Record<string, number> = { 'complaint:2026': 21, 'dispatch:2026': dspSeq, 'lot:2026': 140, 'mix:2026': mixes.length, 'slip:2026': slipSeq };
+  const sequences: Record<string, number> = { 'complaint:2026': 21, 'dispatch:2026': dspSeq, 'lot:2026': Math.max(140, ...lots.map((l) => l.no)), 'mix:2026': mixes.length, 'slip:2026': slipSeq };
   for (const [k, v] of Object.entries(idSeq)) sequences[`id:${k}`] = v;
   return {
     users, counts, orders, rows, files, notifications, rejections, pdfImports,

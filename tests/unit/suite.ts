@@ -29,13 +29,13 @@ export function defineSuite(name: string, open: () => Promise<DB>, skip = false)
 
     it('seeds a fully populated mill', async () => {
       const lots = (await get('qa', '/api/lots')).body.data as { lotNo: string; location: { stage: string } }[];
-      expect(lots).toHaveLength(40);
+      expect(lots).toHaveLength(52); // 40 original lots + 12 across the six newer counts
       expect(new Set(lots.map((l) => l.location.stage)).size).toBeGreaterThanOrEqual(8); // every question "where is it now" has an answer
       const bales = (await get('qa', '/api/bales')).body.data as { status: string }[];
-      expect(bales).toHaveLength(120);
+      expect(bales).toHaveLength(160); // 120 original + 40 for the six newer counts
       expect(bales.some((b) => b.status === 'IN_STORE') && bales.some((b) => b.status === 'ISSUED')).toBe(true);
       const overview = (await get('qa', '/api/masters/overview')).body.data;
-      expect(overview.counts.map((c: { completeness: { overall: number } }) => c.completeness.overall)).toEqual([100, 100, 100, 100, 96.7, 100, 99.5, 96.7, 96.7, 96.7]); // by Ne: 16s 20s 24CH 30CH 30CP 34CH 40CH 40CP 50CP 60CP
+      expect(overview.counts.map((c: { completeness: { overall: number } }) => c.completeness.overall)).toEqual([100, 100, 100, 100, 100, 100, 99.5, 96.7, 100, 100]); // by Ne: 16s 20s 24CH 30CH 30CP 34CH 40CH 40CP 50CP 60CP (40CH / 40CP keep their deliberate gaps)
     });
 
     it('answers a customer question about lot 101 on one screen', async () => {
